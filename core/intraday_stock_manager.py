@@ -19,7 +19,6 @@ from api.kis_chart_api import (
     get_div_code_for_stock
 )
 from api.kis_market_api import get_inquire_daily_itemchartprice, get_inquire_price
-from core.indicators.price_box import PriceBox
 from core.realtime_data_logger import log_intraday_data
 from core.realtime_candle_builder import get_realtime_candle_builder
 from core.dynamic_batch_calculator import DynamicBatchCalculator
