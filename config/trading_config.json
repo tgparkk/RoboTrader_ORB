@@ -1,0 +1,42 @@
+{
+  "data_collection": {
+    "interval_seconds": 30,
+    "candidate_stocks": []
+  },
+  "order_management": {
+    "buy_timeout_seconds": 300,
+    "sell_timeout_seconds": 180,
+    "max_adjustments": 3,
+    "adjustment_threshold_percent": 0.5,
+    "market_order_threshold_percent": 2.0,
+    "buy_budget_ratio": 0.05,
+    "buy_cooldown_minutes": 25
+  },
+  "risk_management": {
+    "max_position_count": 20,
+    "max_position_ratio": 0.3,
+    "stop_loss_ratio": 0.025,
+    "take_profit_ratio": 0.035,
+    "max_daily_loss": 0.1,
+    "use_dynamic_profit_loss": false
+  },
+  "strategy": {
+    "name": "simple_momentum",
+    "parameters": {
+      "momentum_period": 5,
+      "volume_threshold": 1.5,
+      "price_change_threshold": 0.01
+    }
+  },
+  "duplicate_signal_prevention": {
+    "enabled": true,
+    "overlap_threshold": 0.5,
+    "time_filter_hours": 2,
+    "min_loss_threshold": -0.5
+  },
+  "logging": {
+    "level": "INFO",
+    "file_retention_days": 30,
+    "enable_pattern_logging": true
+  }
+}
