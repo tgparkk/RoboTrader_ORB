@@ -129,9 +129,19 @@ logs/
 
 # 데이터 파일
 data/
+!data/robotrader.db
 *.csv
 *.xlsx
 *.json.bak
+
+# 런타임 파일
+bot.pid
+stock_list.json
+
+# 분석 결과
+analysis_results/
+ml_results*/
+improved_signal_analysis/
 
 # IDE 설정
 .vscode/
