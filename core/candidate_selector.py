@@ -6,35 +6,49 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional, Tuple
-from dataclasses import dataclass
 
 from .models import Stock, TradingConfig
 from api.kis_api_manager import KISAPIManager
+from config.candidate_selection_config import DEFAULT_CANDIDATE_SELECTION_CONFIG, CandidateSelectionConfig
+from strategies.candidate_strategy import CandidateStock
+from strategies.strategy_factory import StrategyFactory
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
 
 
-@dataclass
-class CandidateStock:
-    """후보 종목 정보"""
-    code: str
-    name: str
-    market: str
-    score: float  # 선정 점수
-    reason: str   # 선정 이유
-    prev_close: float = 0.0  # 전날 종가 (일봉 기준)
-
-
 class CandidateSelector:
-    """매수 후보 종목 선정기"""
-    
-    def __init__(self, config: TradingConfig, api_manager: KISAPIManager):
+    """매수 후보 종목 선정기 (전략 패턴 적용)"""
+
+    def __init__(
+        self,
+        config: TradingConfig,
+        api_manager: KISAPIManager,
+        selection_config: CandidateSelectionConfig = None,
+        strategy_name: str = "momentum"
+    ):
         self.config = config
         self.api_manager = api_manager
+        self.selection_config = selection_config or DEFAULT_CANDIDATE_SELECTION_CONFIG
         self.logger = setup_logger(__name__)
-        
+
         # stock_list.json 파일 경로
         self.stock_list_file = Path(__file__).parent.parent / "stock_list.json"
+
+        # 전략 로드
+        self.strategy = StrategyFactory.create_candidate_strategy(
+            name=strategy_name,
+            config=self.selection_config,
+            logger=self.logger
+        )
+
+        if self.strategy is None:
+            self.logger.warning(f"전략 '{strategy_name}' 로드 실패. 기본 전략 사용.")
+            # 기본 전략으로 폴백
+            self.strategy = StrategyFactory.create_candidate_strategy(
+                name="momentum",
+                config=self.selection_config,
+                logger=self.logger
+            )
     
     async def select_daily_candidates(self, max_candidates: int = 5) -> List[CandidateStock]:
         """
@@ -189,266 +203,50 @@ class CandidateSelector:
     
     async def _analyze_single_stock(self, stock: Dict) -> Optional[CandidateStock]:
         """
-        개별 종목 분석
-        
-        선정 조건:
-        A. 최고종가: 200일 중 최고종가
-        B. Envelope(10,10) 종가가 상한선 이상  
-        C. 시가 < 종가 (양봉)
-        D. 전일 동시간 대비 거래량 비율 100% 이상
-        E. 종가 > (고가+저가)/2 (중심가격 위)
-        F. 5일 평균 거래대금 5000백만 이상
-        G. NOT 전일 종가대비 시가 7% 이상 상승
-        H. NOT 전일 종가대비 종가 10% 이상 상승  
-        I. 시가대비 종가 3% 이상 상승
+        개별 종목 분석 (전략 위임)
+
+        전략 패턴을 사용하여 종목 평가를 전략 객체에 위임합니다.
         """
         try:
             code = stock['code']
             name = stock['name']
             market = stock['market']
-            
+
             self.logger.debug(f"📊 종목 분석 시작: {code}({name})")
-            
+
             # 현재가 및 기본 정보 조회
             price_data = self.api_manager.get_current_price(code)
             if price_data is None:
                 self.logger.debug(f"❌ {code}: 현재가 데이터 없음")
                 return None
-            
+
             # 일봉 데이터 조회 (최대 100일)
             daily_data = self.api_manager.get_ohlcv_data(code, "D", 100)
             if daily_data is None:
                 self.logger.debug(f"❌ {code}: 일봉 데이터 없음")
                 return None
-            
+
             # 주봉 데이터 조회 (200일 대상, 약 40주 = 280일)
             weekly_data = self.api_manager.get_ohlcv_data(code, "W", 280)
             if weekly_data is None:
                 self.logger.debug(f"❌ {code}: 주봉 데이터 없음")
                 return None
             
-            # 데이터 크기 디버그 로그
-            daily_len = len(daily_data) if hasattr(daily_data, '__len__') else 0
-            weekly_len = len(weekly_data) if hasattr(weekly_data, '__len__') else 0
-            self.logger.debug(f"📊 {code}: 일봉 {daily_len}개, 주봉 {weekly_len}개 조회됨")
-            
-            # 실제 데이터 샘플 확인
-            if hasattr(weekly_data, 'empty') and not weekly_data.empty:
-                self.logger.debug(f"📊 {code}: 주봉 컬럼 - {list(weekly_data.columns)}")
-                self.logger.debug(f"📊 {code}: 주봉 샘플 - {weekly_data.iloc[0].to_dict()}")
-            
-            # daily_data가 DataFrame인 경우 처리
-            if hasattr(daily_data, 'empty'):
-                if daily_data.empty or len(daily_data) < 10:  # 최소 요구사항 완화
-                    self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
-                    return None
-            elif len(daily_data) < 10:
-                self.logger.debug(f"❌ {code}: 일봉 데이터 부족 ({len(daily_data)}일)")
-                return None
-            
-            # weekly_data가 DataFrame인 경우 처리
-            if hasattr(weekly_data, 'empty'):
-                if weekly_data.empty or len(weekly_data) < 5:  # 최소 요구사항 완화
-                    self.logger.debug(f"❌ {code}: 주봉 데이터 부족 ({len(weekly_data)}주)")
-                    return None
-            elif len(weekly_data) < 5:
-                self.logger.debug(f"❌ {code}: 주봉 데이터 부족 ({len(weekly_data)}주)")
-                return None
-            
-            # 거래대금 조건 체크 (최소 50억)
-            volume_amount = getattr(price_data, 'volume_amount', 0)
-            if volume_amount == 0:
-                # volume_amount가 없는 경우 volume * price로 계산
-                current_volume = getattr(price_data, 'volume', 0)
-                current_price = getattr(price_data, 'current_price', 0)
-                volume_amount = current_volume * current_price
-            
-            if volume_amount < 5_000_000_000:
-                self.logger.debug(f"❌ {code}: 거래대금 부족 ({volume_amount/1_000_000_000:.1f}억원)")
-                return None
-            
-            self.logger.debug(f"✅ {code}: 기본 조건 통과 - 거래대금 {volume_amount/1_000_000_000:.1f}억원")
-            
-            # 조건 분석
-            score = 0
-            reasons = []
-            
-            # A. 최고종가 체크 (주봉 데이터 활용, 가능한 기간 내에서)
-            today_close = price_data.current_price
-            
-            # DataFrame인 경우 처리
-            if hasattr(weekly_data, 'empty'):
-                weekly_closes = weekly_data['stck_clpr'].astype(float).tolist()
-            else:
-                weekly_closes = [data.close_price for data in weekly_data]
-            
-            max_close_period = max(weekly_closes)
-            weeks_available = len(weekly_closes)
-            days_equivalent = weeks_available * 7  # 대략적인 일수 환산
-            
-            # 가능한 기간 내에서 신고가 근처인지 체크
-            if today_close >= max_close_period * 0.98:  # 98% 이상이면 신고가 근처
-                # 긴 기간일수록 더 높은 점수
-                if days_equivalent >= 200:
-                    score += 25
-                    reasons.append(f"200일+ 신고가 근처")
-                elif days_equivalent >= 100:
-                    score += 20
-                    reasons.append(f"100일+ 신고가 근처")
-                else:
-                    score += 15
-                    reasons.append(f"{days_equivalent}일 신고가 근처")
-                    
-                self.logger.debug(f"✅ {code}: {days_equivalent}일 신고가 ({max_close_period:,.0f}원 대비 {today_close/max_close_period:.1%})")
-            
-            # B. Envelope 상한선 돌파 체크
-            if self._check_envelope_breakout(daily_data, today_close):
-                score += 15
-                reasons.append("Envelope 상한선 돌파")
-            
-            # C. 양봉 체크 (시가 < 종가)
-            today_open = getattr(price_data, 'open_price', today_close)
-            if today_close > today_open:
-                score += 10
-                reasons.append("양봉 형성")
-            
-            # D. 거래량 급증 체크 (평균 대비 3배 이상)
-            if hasattr(daily_data, 'empty'):
-                # DataFrame인 경우
-                recent_20d = daily_data.tail(20)
-                avg_volume = recent_20d['acml_vol'].astype(float).mean()
-            else:
-                # List인 경우
-                recent_data = list(daily_data)[-20:]
-                avg_volume = sum([data.volume for data in recent_data]) / len(recent_data)
-            
-            current_volume = getattr(price_data, 'volume', 0)
-            if current_volume >= avg_volume * 3:
-                score += 25
-                reasons.append("거래량 3배 급증")
-            elif current_volume >= avg_volume * 2:
-                score += 15
-                reasons.append("거래량 2배 증가")
-            
-            # E. 중심가격 위 체크
-            high_price = getattr(price_data, 'high_price', today_close)
-            low_price = getattr(price_data, 'low_price', today_close)
-            mid_price = (high_price + low_price) / 2
-            if today_close > mid_price:
-                score += 10
-                reasons.append("중심가격 상회")
-            
-            # F. 5일 평균 거래대금 체크 (50억 이상)
-            if hasattr(daily_data, 'empty'):
-                # DataFrame인 경우
-                recent_5d = daily_data.tail(5)
-                volumes = recent_5d['acml_vol'].astype(float)
-                closes = recent_5d['stck_clpr'].astype(float)
-                avg_amount_5d = (volumes * closes).mean()
-            else:
-                # List인 경우
-                recent_5d = list(daily_data)[-5:]
-                avg_amount_5d = sum([data.volume * data.close_price for data in recent_5d]) / len(recent_5d)
-            
-            if avg_amount_5d >= 5_000_000_000:
-                score += 15
-                reasons.append("충분한 거래대금")
-            
-            # G, H. 급등주 제외 조건
-            if hasattr(daily_data, 'empty'):
-                # DataFrame인 경우
-                if len(daily_data) >= 2:
-                    prev_close = float(daily_data.iloc[-2]['stck_clpr'])
-                    open_change = (today_open - prev_close) / prev_close if prev_close > 0 else 0
-                    close_change = (today_close - prev_close) / prev_close if prev_close > 0 else 0
-                    
-                    # 시가 7% 이상 갭상승 시 제외
-                    if open_change >= 0.07:
-                        self.logger.debug(f"❌ {code}: 시가 갭상승 제외 ({open_change:.1%})")
-                        return None
-                    
-                    # 종가 10% 이상 상승 시 제외  
-                    if close_change >= 0.10:
-                        self.logger.debug(f"❌ {code}: 급등주 제외 ({close_change:.1%})")
-                        return None
-            else:
-                # List인 경우
-                data_list = list(daily_data)
-                if len(data_list) >= 2:
-                    prev_close = data_list[-2].close_price
-                    open_change = (today_open - prev_close) / prev_close if prev_close > 0 else 0
-                    close_change = (today_close - prev_close) / prev_close if prev_close > 0 else 0
-                    
-                    # 시가 7% 이상 갭상승 시 제외
-                    if open_change >= 0.07:
-                        self.logger.debug(f"❌ {code}: 시가 갭상승 제외 ({open_change:.1%})")
-                        return None
-                    
-                    # 종가 10% 이상 상승 시 제외  
-                    if close_change >= 0.10:
-                        self.logger.debug(f"❌ {code}: 급등주 제외 ({close_change:.1%})")
-                        return None
-            
-            # I. 시가대비 종가 3% 이상 상승
-            intraday_change = (today_close - today_open) / today_open if today_open > 0 else 0
-            if intraday_change >= 0.03:
-                score += 20
-                reasons.append("당일 3% 이상 상승")
-            
-            self.logger.debug(f"📊 {code}: 최종 점수 {score}점 - {', '.join(reasons) if reasons else '조건 미충족'}")
-            
-            # 최소 점수 기준
-            if score < 50:
-                self.logger.debug(f"❌ {code}: 최소 점수 미달 ({score}점 < 50점)")
-                return None
-            
-            # 전날 종가 추출 (이미 계산된 prev_close 활용)
-            final_prev_close = 0.0
-            if hasattr(daily_data, 'empty') and len(daily_data) >= 2:
-                final_prev_close = float(daily_data.iloc[-2]['stck_clpr'])
-            elif len(data_list) >= 2:
-                final_prev_close = data_list[-2].close_price
-            
-            return CandidateStock(
+            # 전략을 사용하여 종목 평가
+            candidate = await self.strategy.evaluate_stock(
                 code=code,
                 name=name,
                 market=market,
-                score=score,
-                reason=", ".join(reasons),
-                prev_close=final_prev_close
+                price_data=price_data,
+                daily_data=daily_data,
+                weekly_data=weekly_data
             )
+
+            return candidate
             
         except Exception as e:
             self.logger.warning(f"종목 분석 실패 {stock.get('code')}: {e}")
             return None
-    
-    def _check_envelope_breakout(self, daily_data, current_price: float) -> bool:
-        """Envelope(10, 10%) 상한선 돌파 체크"""
-        try:
-            if hasattr(daily_data, 'empty'):
-                # DataFrame인 경우
-                if len(daily_data) < 10:
-                    return False
-                
-                recent_10d = daily_data.tail(10)
-                ma10 = recent_10d['stck_clpr'].astype(float).mean()
-            else:
-                # List인 경우
-                data_list = list(daily_data)
-                if len(data_list) < 10:
-                    return False
-                
-                recent_10d = data_list[-10:]
-                ma10 = sum([data.close_price for data in recent_10d]) / len(recent_10d)
-            
-            # Envelope 상한선 (MA + 10%)
-            upper_envelope = ma10 * 1.10
-            
-            return current_price >= upper_envelope
-            
-        except Exception:
-            return False
-    
     def update_candidate_stocks_in_config(self, candidates: List[CandidateStock]):
         """선정된 후보 종목을 데이터 컬렉터에 업데이트"""
         try:

@@ -1,63 +1,103 @@
--눌림목 캔들패턴-
+# RoboTrader 시스템 가이드
 
-주가는 상승, 거래량의 추세는 하락, 주가가 이등분선 위에서 조정받는 동안 거래량이 급감하며 봉 캔들이 짧아졌다. 이후 급감되었던 거래량이 조금씩 증가하며 봉의 크키가 서서히 커진다 -> 매수
-
-
-
-(본래 주가가 상승할수록 거래량 증가가 일반적이지만, 주가가 상승할수록 거래량이 하락추세면 매물의 부담이 없다는것. 적은 돈으로 주가가 올랐기 때문에 하락할 때도 적은 돈으로 하락할 가능성 높음. 즉, 대량의 매도물량이 나오지 않을 가능성이 높아 매물부담 없이 눌림목에서 반등 확률 높음)
-
-
-
-'급감된 거래량' 을 다음 봉에서 상회를 했고 캔들의 크기가 커졌는지 판단.
-
-손절 타이밍
-
-'이등분선 이탈' 또는 지지가 되었던 저점을 이탈할 때.
-
-
-
-이등분선을 이탈해도 , 지지되다가 이등분선을 넘어서면서 거래량이 조금씩 증가 -> 매수
-
-
-
-당일 분봉차트(3분봉) 에서 가장 많이 나온 거래량을 기준거래량으로 설정하고 이 기준 거래량의 1/2 수치 정도 거래되면서 주가가 하락한다면 매도세가 쏟아진다고 판단가능. 이 매도세는 결국 악성매물로 바뀌게 되어 주가 상승 방해.
-
-
-
-통상적으로 기준 거래량의 1/4 수준으로 거래돼야 상대적으로 매물부담이 덜함.
+이 문서는 RoboTrader 시스템 사용 및 분석 방법을 설명합니다.
 
 ---
 
-# RoboTrader 시스템 분석 방법
+## 시스템 구조
+
+RoboTrader는 전략 독립적인 자동매매 시스템 템플릿입니다.
+
+### 핵심 컴포넌트
+- **데이터 수집**: 실시간 시세 데이터 수집 및 관리
+- **종목 선정**: 후보 종목 스크리닝 및 필터링
+- **매매 판단**: 사용자 정의 전략 기반 매매 신호 생성
+- **주문 관리**: 주문 실행, 체결 확인, 정정/취소
+- **리스크 관리**: 손절/익절, 포지션 관리
+- **모니터링**: 텔레그램 알림, 로깅
+
+---
 
 ## 실시간 거래 분석
-- **로그 파일**: `logs/trading_YYYYMMDD.log`
-- **종목 선정 시점**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "선정 완료"`
-- **매수 신호**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "매수 신호 발생"`
-- **ML 필터 결과**: `grep "종목코드" logs/trading_YYYYMMDD.log | grep "ML 필터"`
-- **패턴 상세 정보**: `pattern_data_log/pattern_data_YYYYMMDD.jsonl`
 
-## 시뮬레이션 분석
-- **순수 패턴 신호**: `signal_replay_log/signal_new2_replay_YYYYMMDD_9_00_0.txt`
-- **ML 필터 적용**: `signal_replay_log_ml/signal_ml_replay_YYYYMMDD_9_00_0.txt`
+### 로그 파일 위치
+- **거래 로그**: `logs/trading_YYYYMMDD.log`
+- **패턴 데이터**: `pattern_data_log/pattern_data_YYYYMMDD.jsonl` (전략별로 활성화 가능)
+
+### 주요 분석 명령어
+```bash
+# 종목 선정 시점 확인
+grep "종목코드" logs/trading_YYYYMMDD.log | grep "선정 완료"
+
+# 매수 신호 발생 확인
+grep "종목코드" logs/trading_YYYYMMDD.log | grep "매수 신호 발생"
+
+# ML 필터 결과 확인 (ML 사용 시)
+grep "종목코드" logs/trading_YYYYMMDD.log | grep "ML 필터"
+```
+
+---
+
+## 시뮬레이션 분석 (전략별 구현 필요)
+
+### 시뮬레이션 로그
+- **순수 신호 로그**: `signal_replay_log/signal_new2_replay_YYYYMMDD_9_00_0.txt`
+- **ML 필터 적용 로그**: `signal_replay_log_ml/signal_ml_replay_YYYYMMDD_9_00_0.txt`
 - **데이터 소스**: `cache/minute_data/종목코드_YYYYMMDD.pkl` (확정된 캐시 데이터)
-- **주의**: selection_date 필터링 적용됨 (선정 시점 이전 신호는 차단)
 
-## 실시간 vs 시뮬 차이 분석 3단계
-1. **신호 시점 비교**: 실시간과 시뮬에서 같은 시간에 신호가 발생했는가?
-2. **selection_date 확인**: 시뮬에서 필터링되었는가? (completion_time < selection_date 체크)
-3. **데이터 일치 확인**: 캐시 데이터 vs 실시간 패턴 로그 데이터 비교
+### 주의사항
+- **selection_date 필터링**: 시뮬레이션에서 선정 시점 이전 신호는 차단됨
+- **데이터 타임스탬프**: 캔들 완성 시간 기준 (예: 10:42 캔들 → 10:45:00 완성)
+
+---
+
+## 실시간 vs 시뮬레이션 차이 분석
+
+### 3단계 검증 프로세스
+1. **신호 시점 비교**: 실시간과 시뮬레이션에서 같은 시간에 신호가 발생했는가?
+2. **selection_date 확인**: 시뮬레이션에서 필터링되었는가? (`completion_time < selection_date` 체크)
+3. **데이터 일치 확인**: 캐시 데이터 vs 실시간 데이터 비교
+
+### 주요 차이 원인
+1. **selection_date 필터링**: 시뮬레이션에서만 선정 시점 이전 신호 차단
+2. **데이터 불일치**: 실시간은 지속 업데이트, 캐시는 확정값
+3. **전략 로직 차이**: 패턴 구조나 조건이 미묘하게 다를 경우
+
+---
 
 ## 핵심 개념
+
+### 타이밍
 - **3분봉 completion_time**: 라벨 시간 + 3분 (예: 10:42 캔들 → 10:45:00 완성)
-- **ML 임계값**: 50% (config/ml_settings.py의 ML_THRESHOLD)
-- **selection_date 필터링**: 시뮬레이션에서만 적용 (실시간은 없음)
-- **데이터 차이**: 실시간은 지속 업데이트, 캐시는 확정값 → 같은 시간대 캔들도 값이 다를 수 있음
+- **selection_date**: 종목 선정 완료 시간 (시뮬레이션 필터링 기준)
 
-## 주요 차이 원인
-1. **selection_date 필터링**: 시뮬에서 선정 시점 이전 신호 차단
-2. **데이터 불일치**: 실시간 업데이트 데이터 vs 확정 캐시 데이터
-3. **ML 확률 차이**: 패턴 구조가 미묘하게 다를 경우
+### ML 필터 (전략별 활성화)
+- **ML 임계값**: 50% (기본값, `config/ml_settings.py`에서 조정 가능)
+- **작동 방식**: 시뮬레이션에서만 적용 / 실시간은 별도 구현 필요
 
-상세 가이드: `ROBOTRADER_ANALYSIS_GUIDE.md` 참조
+### 데이터 소스
+- **실시간**: 지속 업데이트되는 데이터 (API 실시간 수신)
+- **캐시**: 확정된 과거 데이터 (pkl 파일)
+- **차이점**: 같은 시간대 캔들도 값이 다를 수 있음
 
+---
+
+## 전략 구현 가이드
+
+RoboTrader는 전략 독립적 템플릿입니다. 사용자가 직접 전략을 구현해야 합니다.
+
+### 구현 위치
+- **매매 판단 로직**: `core/trading_decision_engine.py`
+  - `generate_buy_signal()`: 매수 신호 생성
+  - `generate_sell_signal()`: 매도 신호 생성
+
+### 설정 파일
+- **전략 파라미터**: `config/trading_config.json` → `strategy` 섹션
+- **리스크 관리**: `config/trading_config.json` → `risk_management` 섹션
+- **후보 종목 조건**: `core/candidate_selector.py` (필요 시 수정)
+
+---
+
+## 추가 문서
+- 상세 가이드: `ROBOTRADER_ANALYSIS_GUIDE.md` (프로젝트별로 작성 필요)
+- 종목 상태 관리: `docs/stock_state_management.md`

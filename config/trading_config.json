@@ -21,12 +21,9 @@
     "use_dynamic_profit_loss": false
   },
   "strategy": {
-    "name": "simple_momentum",
-    "parameters": {
-      "momentum_period": 5,
-      "volume_threshold": 1.5,
-      "price_change_threshold": 0.01
-    }
+    "candidate_selection": "momentum",
+    "trading_decision": "",
+    "parameters": {}
   },
   "duplicate_signal_prevention": {
     "enabled": true,
