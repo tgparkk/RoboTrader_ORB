@@ -117,13 +117,13 @@ class StrategyFactory:
 def register_default_strategies():
     """기본 전략 등록"""
     from .momentum_candidate_strategy import MomentumCandidateStrategy
+    from .orb_strategy import ORBStrategy
 
-    # 후보 선정 전략
+    # 후보 선정 전략 (레거시 - 하위 호환성)
     StrategyFactory.register_candidate_strategy('momentum', MomentumCandidateStrategy)
 
-    # 매매 전략
-    # (현재는 구현된 전략 없음 - 사용자가 추가해야 함)
-    # StrategyFactory.register_trading_strategy('example', ExampleTradingStrategy)
+    # 통합 매매 전략 (후보 선정 + 매매 판단)
+    StrategyFactory.register_trading_strategy('orb', ORBStrategy)
 
 
 # 모듈 로드 시 기본 전략 등록
