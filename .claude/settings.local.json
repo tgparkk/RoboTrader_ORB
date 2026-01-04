@@ -51,7 +51,8 @@
       "Bash(timeout 60 python:*)",
       "Bash(timeout 10 python:*)",
       "Bash(pip install:*)",
-      "Bash(timeout 8 python:*)"
+      "Bash(timeout 8 python:*)",
+      "Bash(pip freeze:*)"
     ],
     "deny": [],
     "ask": []

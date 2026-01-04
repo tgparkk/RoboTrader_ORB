@@ -1,0 +1,43 @@
+# RoboTrader ORB 전략 필수 패키지
+
+# API & 네트워크
+requests==2.32.3
+websockets==15.0.1
+python-dotenv==1.1.0
+
+# 데이터 분석
+pandas==2.2.3
+numpy==2.0.2
+scipy==1.13.1
+
+# 기술적 분석
+ta==0.11.0
+
+# 기계학습
+scikit-learn==1.6.1
+lightgbm==4.6.0
+
+# 시각화
+matplotlib==3.9.4
+plotly==6.3.0
+
+# 텔레그램 봇
+python-telegram-bot==22.5
+
+# 한국 주식 데이터
+pykrx==1.0.48
+
+# 스케줄링
+APScheduler==3.11.1
+schedule==1.2.2
+
+# 유틸리티
+python-dateutil==2.9.0.post0
+pytz==2025.1
+colorama==0.4.6
+tqdm==4.67.1
+psutil==7.0.0
+
+# 개발 도구
+pytest==8.3.4
+pytest-asyncio==0.25.4
