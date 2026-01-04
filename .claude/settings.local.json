@@ -47,7 +47,11 @@
       "Bash(git remote add:*)",
       "Bash(git branch:*)",
       "Bash(timeout 5 python:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(timeout 60 python:*)",
+      "Bash(timeout 10 python:*)",
+      "Bash(pip install:*)",
+      "Bash(timeout 8 python:*)"
     ],
     "deny": [],
     "ask": []

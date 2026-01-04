@@ -122,7 +122,8 @@ def register_default_strategies():
     # 후보 선정 전략 (레거시 - 하위 호환성)
     StrategyFactory.register_candidate_strategy('momentum', MomentumCandidateStrategy)
 
-    # 통합 매매 전략 (후보 선정 + 매매 판단)
+    # ORB 전략 (후보 선정 + 매매 판단 통합)
+    StrategyFactory.register_candidate_strategy('orb', ORBStrategy)
     StrategyFactory.register_trading_strategy('orb', ORBStrategy)
 
 

@@ -21,7 +21,7 @@
     "use_dynamic_profit_loss": false
   },
   "strategy": {
-    "candidate_selection": "momentum",
+    "candidate_selection": "",
     "trading_decision": "",
     "parameters": {}
   },

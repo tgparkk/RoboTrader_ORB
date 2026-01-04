@@ -27,7 +27,7 @@ from config.settings import load_trading_config
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, get_market_status, is_market_open, KST
 from config.market_hours import MarketHours
-from post_market_chart_generator import PostMarketChartGenerator
+# from post_market_chart_generator import PostMarketChartGenerator  # 파일 없음
 
 
 class DayTradingBot:
@@ -50,7 +50,11 @@ class DayTradingBot:
         self.telegram = TelegramIntegration(trading_bot=self)
         self.data_collector = RealTimeDataCollector(self.config, self.api_manager)
         self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
-        self.candidate_selector = CandidateSelector(self.config, self.api_manager)
+        self.candidate_selector = CandidateSelector(
+            self.config,
+            self.api_manager,
+            strategy_name="orb"
+        )
         self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
         self.trading_manager = TradingStockManager(
             self.intraday_manager, self.data_collector, self.order_manager, self.telegram
@@ -61,7 +65,8 @@ class DayTradingBot:
             telegram_integration=self.telegram,
             trading_manager=self.trading_manager,
             api_manager=self.api_manager,
-            intraday_manager=self.intraday_manager
+            intraday_manager=self.intraday_manager,
+            strategy_name="orb"
         )  # 🆕 매매 판단 엔진
 
         # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
@@ -447,34 +452,35 @@ class DayTradingBot:
                     self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
                 
                 # [리얼매매 코드 - 활성화]
-                try:
-                    # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
-                    raw_candle_time = data_3min['datetime'].iloc[-1]
-                    minute_normalized = (raw_candle_time.minute // 3) * 3
-                    current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
-                    await self.decision_engine.execute_real_buy(
-                        trading_stock,
-                        buy_reason,
-                        buy_info['buy_price'],
-                        buy_info['quantity'],
-                        candle_time=current_candle_time
-                    )
-                    # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
-                    self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
-                except Exception as e:
-                    self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
-                    
-                # [가상매매 코드 - 주석처리]
+                # [실제 매매 코드 - 주석처리]
                 # try:
-                #     await self.decision_engine.execute_virtual_buy(trading_stock, data_3min, buy_reason)
-                #     # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
-                #     try:
-                #         self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
-                #     except Exception:
-                #         pass
-                #     self.logger.info(f"🔥 가상 매수 완료 처리: {stock_code}({stock_name}) - {buy_reason}")
+                #     # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
+                #     raw_candle_time = data_3min['datetime'].iloc[-1]
+                #     minute_normalized = (raw_candle_time.minute // 3) * 3
+                #     current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
+                #     await self.decision_engine.execute_real_buy(
+                #         trading_stock,
+                #         buy_reason,
+                #         buy_info['buy_price'],
+                #         buy_info['quantity'],
+                #         candle_time=current_candle_time
+                #     )
+                #     # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+                #     self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
                 # except Exception as e:
-                #     self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
+                #     self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
+
+                # [가상매매 코드 - 활성화]
+                try:
+                    await self.decision_engine.execute_virtual_buy(trading_stock, data_3min, buy_reason)
+                    # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
+                    try:
+                        self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
+                    except Exception:
+                        pass
+                    self.logger.info(f"🔥 가상 매수 완료 처리: {stock_code}({stock_name}) - {buy_reason}")
+                except Exception as e:
+                    self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
                     
             else:
                 #self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
@@ -508,19 +514,19 @@ class DayTradingBot:
                 # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
-                    # [실제 매도 주문 실행 - 활성화]
-                    try:
-                        await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
-                        self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
-                    except Exception as e:
-                        self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
-                    
-                    # [가상매매 코드 - 주석처리]
+                    # [실제 매도 주문 실행 - 주석처리]
                     # try:
-                    #     await self.decision_engine.execute_virtual_sell(trading_stock, combined_data, sell_reason)
-                    #     self.logger.info(f"📉 가상 매도 완료 처리: {stock_code}({stock_name}) - {sell_reason}")
+                    #     await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
+                    #     self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
                     # except Exception as e:
-                    #     self.logger.error(f"❌ 가상 매도 처리 오류: {e}")
+                    #     self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
+
+                    # [가상매매 코드 - 활성화]
+                    try:
+                        await self.decision_engine.execute_virtual_sell(trading_stock, None, sell_reason)
+                        self.logger.info(f"📉 가상 매도 완료 처리: {stock_code}({stock_name}) - {sell_reason}")
+                    except Exception as e:
+                        self.logger.error(f"❌ 가상 매도 처리 오류: {e}")
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
     
@@ -1021,18 +1027,19 @@ class DayTradingBot:
     async def _generate_post_market_charts(self):
         """장 마감 후 선정 종목 차트 생성 (15:30 이후)"""
         try:
-            # 차트 생성기 지연 초기화
-            if self.chart_generator is None:
-                self.chart_generator = PostMarketChartGenerator()
-                if not self.chart_generator.initialize():
-                    self.logger.error("❌ 차트 생성기 초기화 실패")
-                    return
-            
-            # PostMarketChartGenerator의 통합 메서드 호출
-            results = await self.chart_generator.generate_post_market_charts_for_intraday_stocks(
-                intraday_manager=self.intraday_manager,
-                telegram_integration=self.telegram
-            )
+            # 차트 생성기 지연 초기화 (파일 없음 - 주석처리)
+            # if self.chart_generator is None:
+            #     self.chart_generator = PostMarketChartGenerator()
+            #     if not self.chart_generator.initialize():
+            #         self.logger.error("❌ 차트 생성기 초기화 실패")
+            #         return
+
+            # PostMarketChartGenerator의 통합 메서드 호출 (파일 없음 - 주석처리)
+            # results = await self.chart_generator.generate_post_market_charts_for_intraday_stocks(
+            #     intraday_manager=self.intraday_manager,
+            #     telegram_integration=self.telegram
+            # )
+            results = {'success': False}  # 임시
             
             # 결과 로깅
             if results.get('success', False):
