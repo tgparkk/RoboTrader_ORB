@@ -27,6 +27,10 @@ python-telegram-bot==22.5
 # 한국 주식 데이터
 pykrx==1.0.48
 
+# 웹 스크래핑
+beautifulsoup4==4.12.3
+lxml==5.3.0
+
 # 스케줄링
 APScheduler==3.11.1
 schedule==1.2.2
@@ -40,4 +44,4 @@ psutil==7.0.0
 
 # 개발 도구
 pytest==8.3.4
-pytest-asyncio==0.25.4
+pytest-asyncio==0.23.8
