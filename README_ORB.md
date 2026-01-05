@@ -1,6 +1,6 @@
-# RoboTrader - ORB 전략 버전
+# RoboTrader_orb - ORB 전략 버전
 
-ORB (Opening Range Breakout) 전략이 구현된 RoboTrader 자동매매 시스템입니다.
+ORB (Opening Range Breakout) 전략이 구현된 RoboTrader_orb 자동매매 시스템입니다.
 
 ---
 

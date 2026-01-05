@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 > nul
 echo ========================================
-echo      RoboTrader 차트 생성
+echo      RoboTrader_orb 차트 생성
 echo ========================================
 
 :: 현재 디렉토리로 이동

@@ -1,4 +1,4 @@
-# RoboTrader - 주식 단타 거래 시스템
+# RoboTrader_orb - 주식 단타 거래 시스템
 
 한국투자증권 KIS API를 활용한 자동 주식 단타 거래 시스템입니다.
 

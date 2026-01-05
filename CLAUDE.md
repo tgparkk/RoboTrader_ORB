@@ -1,12 +1,12 @@
-# RoboTrader 시스템 가이드
+# RoboTrader_orb 시스템 가이드
 
-이 문서는 RoboTrader 시스템 사용 및 분석 방법을 설명합니다.
+이 문서는 RoboTrader_orb 시스템 사용 및 분석 방법을 설명합니다.
 
 ---
 
 ## 시스템 구조
 
-RoboTrader는 전략 독립적인 자동매매 시스템 템플릿입니다.
+RoboTrader_orb는 전략 독립적인 자동매매 시스템 템플릿입니다.
 
 ### 핵심 컴포넌트
 - **데이터 수집**: 실시간 시세 데이터 수집 및 관리
@@ -84,7 +84,7 @@ grep "종목코드" logs/trading_YYYYMMDD.log | grep "ML 필터"
 
 ## 전략 구현 가이드
 
-RoboTrader는 전략 독립적 템플릿입니다. 사용자가 직접 전략을 구현해야 합니다.
+RoboTrader_orb는 전략 독립적 템플릿입니다. 사용자가 직접 전략을 구현해야 합니다.
 
 ### 구현 위치
 - **매매 판단 로직**: `core/trading_decision_engine.py`

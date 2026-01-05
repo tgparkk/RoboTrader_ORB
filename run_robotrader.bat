@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 > nul
 echo ========================================
-echo    RoboTrader 주식 단타 거래 시스템
+echo    RoboTrader_orb 주식 단타 거래 시스템
 echo ========================================
 
 :: 현재 디렉토리로 이동
@@ -48,12 +48,12 @@ if not exist "logs" mkdir logs
 
 :: 프로그램 실행
 echo.
-echo 🚀 RoboTrader 시작 중...
+echo 🚀 RoboTrader_orb 시작 중...
 echo 종료하려면 Ctrl+C를 누르세요.
 echo.
 python main.py
 
 :: 종료 메시지
 echo.
-echo RoboTrader가 종료되었습니다.
+echo RoboTrader_orb가 종료되었습니다.
 pause
