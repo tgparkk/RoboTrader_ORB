@@ -5,7 +5,7 @@ import asyncio
 import signal
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, time
 from pathlib import Path
 import pandas as pd
 
@@ -236,9 +236,10 @@ class DayTradingBot:
             #await self._check_condition_search()
 
             self.logger.info("🤖 매매 의사결정 태스크 시작")
-            
+
             last_condition_check = datetime(2000, 1, 1, tzinfo=KST)  # 초기값
-            
+            orb_range_calculated = False  # ORB 레인지 계산 완료 플래그
+
             while self.is_running:
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
@@ -263,7 +264,12 @@ class DayTradingBot:
                     (current_time - last_condition_check).total_seconds() >= 60):  # 60초
                     await self._check_condition_search()
                     last_condition_check = current_time
-                
+
+                # 🆕 ORB 레인지 계산 (09:10 이후 한 번만 실행)
+                if not orb_range_calculated and current_time.time() >= time(9, 10):
+                    await self._calculate_orb_ranges()
+                    orb_range_calculated = True
+
                 # 매매 판단 시스템 실행 (5초 주기)
                 # 실시간 잔고 조회 후 자금 관리자 업데이트
                 balance_info = self.api_manager.get_account_balance()
@@ -957,7 +963,77 @@ class DayTradingBot:
         except Exception as e:
             self.logger.error(f"❌ 장중 조건검색 체크 오류: {e}")
             await self.telegram.notify_error("Condition Search", e)
-    
+
+    async def _calculate_orb_ranges(self):
+        """ORB 레인지 계산 (09:10 이후 실행)"""
+        try:
+            from core.models import StockState
+
+            self.logger.info("📊 ORB 레인지 계산 시작 (09:00~09:10 구간)")
+
+            # 선정된 종목 조회
+            selected_stocks = self.trading_manager.get_stocks_by_state(StockState.SELECTED)
+
+            if not selected_stocks:
+                self.logger.warning("⚠️ ORB 레인지 계산: 선정된 종목 없음")
+                return
+
+            self.logger.info(f"🎯 ORB 레인지 계산 대상: {len(selected_stocks)}개 종목")
+
+            # ORB 전략이 있는지 확인
+            if not hasattr(self.decision_engine, 'strategy') or self.decision_engine.strategy is None:
+                self.logger.error("❌ ORB 레인지 계산 실패: 전략 객체 없음")
+                return
+
+            strategy = self.decision_engine.strategy
+
+            # 각 종목에 대해 ORB 레인지 계산
+            success_count = 0
+            failed_count = 0
+
+            for trading_stock in selected_stocks:
+                try:
+                    stock_code = trading_stock.code
+                    stock_name = trading_stock.name
+
+                    # 09:00~09:10 구간 1분봉 데이터 조회
+                    today = now_kst().strftime('%Y%m%d')
+                    from api.kis_chart_api import get_full_trading_day_data_async
+
+                    minute_1_data = await get_full_trading_day_data_async(
+                        stock_code=stock_code,
+                        target_date=today,
+                        selected_time="091000",  # 09:10까지
+                        start_time="090000"      # 09:00부터
+                    )
+
+                    if minute_1_data is None or (hasattr(minute_1_data, 'empty') and minute_1_data.empty):
+                        self.logger.warning(f"⚠️ {stock_code}({stock_name}): 09:00~09:10 1분봉 데이터 없음")
+                        failed_count += 1
+                        continue
+
+                    # ORB 레인지 계산
+                    result = await strategy.calculate_orb_range(stock_code, minute_1_data)
+
+                    if result:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+
+                except Exception as e:
+                    self.logger.error(f"❌ {trading_stock.code} ORB 레인지 계산 오류: {e}")
+                    failed_count += 1
+
+            self.logger.info(
+                f"✅ ORB 레인지 계산 완료: 성공 {success_count}개, 실패 {failed_count}개"
+            )
+
+        except Exception as e:
+            self.logger.error(f"❌ ORB 레인지 계산 태스크 오류: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            await self.telegram.notify_error("ORB Range Calculation", e)
+
     async def _update_intraday_data(self):
         """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""
         try:

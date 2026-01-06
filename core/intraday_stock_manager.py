@@ -1045,38 +1045,13 @@ class IntradayStockManager:
                 combined_data = historical_data.copy()
                 self.logger.debug(f"📊 {stock_code} 과거 데이터만 사용: {len(combined_data)}건 (realtime_data 아직 없음)")
                 
-                # 데이터 부족 시 자동 수집 시도
+                # 데이터 부족 시 경고 (자동 수집 비활성화 - 일반 함수에서 await 불가)
                 if len(combined_data) < 15:
-                    try:
-                        from trade_analysis.data_sufficiency_checker import collect_minute_data_from_api
-                        from utils.korean_time import now_kst
-                        
-                        today = now_kst().strftime('%Y%m%d')
-                        self.logger.info(f"🔄 {stock_code} 데이터 부족으로 자동 수집 시도...")
-                        
-                        # API에서 직접 분봉 데이터 수집
-                        minute_data = collect_minute_data_from_api(stock_code, today)
-                        if minute_data is not None and not minute_data.empty:
-                            # 🆕 캐시 저장 제거 (15:30 장 마감 시에만 저장)
-                            # 메모리에만 저장
-                            
-                            # historical_data에 추가
-                            with self._lock:
-                                if stock_code in self.selected_stocks:
-                                    self.selected_stocks[stock_code].historical_data = minute_data
-                                    self.selected_stocks[stock_code].data_complete = True
-                                    self.selected_stocks[stock_code].last_update = now_kst()
-                            
-                            # 수정된 데이터로 다시 결합
-                            combined_data = minute_data.copy()
-                            self.logger.info(f"✅ {stock_code} 자동 수집 완료: {len(combined_data)}개 (메모리에만 저장)")
-                        else:
-                            self.logger.warning(f"❌ {stock_code} 자동 수집 실패")
-                            return None
-                            
-                    except Exception as e:
-                        self.logger.error(f"❌ {stock_code} 자동 수집 중 오류: {e}")
-                        return None
+                    self.logger.warning(
+                        f"⚠️ {stock_code} 데이터 부족: {len(combined_data)}건 "
+                        f"(최소 15건 필요, 초기 수집 시 자동 해결됨)"
+                    )
+                    # 데이터가 부족해도 있는 데이터 사용 (None 반환하지 않음)
             else:
                 combined_data = pd.concat([historical_data, realtime_data], ignore_index=True)
                 #self.logger.debug(f"📊 {stock_code} 과거+실시간 데이터 결합: {len(historical_data)}+{len(realtime_data)}={len(combined_data)}건")
