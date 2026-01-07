@@ -72,7 +72,7 @@ class TradingDecisionEngine:
 
             # 전략에 매수 신호 요청
             buy_signal = await self.strategy.generate_buy_signal(
-                code=trading_stock.code,
+                code=trading_stock.stock_code,
                 minute_data=data,
                 current_price=current_price,
                 trading_stock=trading_stock
@@ -89,7 +89,7 @@ class TradingDecisionEngine:
             return True, buy_signal.reason, buy_info
 
         except Exception as e:
-            self.logger.error(f"매수 판단 실패 ({trading_stock.code}): {e}")
+            self.logger.error(f"매수 판단 실패 ({trading_stock.stock_code}): {e}")
             return False, f"분석 오류: {e}", buy_info
 
     async def analyze_sell_decision(self, trading_stock, data) -> Tuple[bool, str]:
@@ -118,7 +118,7 @@ class TradingDecisionEngine:
         if self.strategy:
             try:
                 sell_signal = await self.strategy.generate_sell_signal(
-                    code=trading_stock.code,
+                    code=trading_stock.stock_code,
                     position=trading_stock,
                     minute_data=data,
                     current_price=current_price
@@ -128,7 +128,7 @@ class TradingDecisionEngine:
                     return True, sell_signal.reason
 
             except Exception as e:
-                self.logger.error(f"전략 매도 판단 실패 ({trading_stock.code}): {e}")
+                self.logger.error(f"전략 매도 판단 실패 ({trading_stock.stock_code}): {e}")
 
         return False, ""
 
@@ -152,8 +152,8 @@ class TradingDecisionEngine:
 
             # 가상 매수 실행
             buy_id = self.virtual_trading.execute_virtual_buy(
-                stock_code=trading_stock.code,
-                stock_name=trading_stock.name,
+                stock_code=trading_stock.stock_code,
+                stock_name=trading_stock.stock_name,
                 price=current_price,
                 quantity=quantity,
                 strategy="ORB",
@@ -161,13 +161,13 @@ class TradingDecisionEngine:
             )
 
             if buy_id:
-                self.logger.info(f"✅ 가상 매수 성공: {trading_stock.code}({trading_stock.name}) "
+                self.logger.info(f"✅ 가상 매수 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
                                f"{quantity}주 @{current_price:,.0f}원 - {reason}")
             else:
-                self.logger.warning(f"⚠️ 가상 매수 실패: {trading_stock.code}")
+                self.logger.warning(f"⚠️ 가상 매수 실패: {trading_stock.stock_code}")
 
         except Exception as e:
-            self.logger.error(f"❌ 가상 매수 실행 오류 ({trading_stock.code}): {e}")
+            self.logger.error(f"❌ 가상 매수 실행 오류 ({trading_stock.stock_code}): {e}")
             import traceback
             self.logger.error(traceback.format_exc())
 
@@ -182,9 +182,9 @@ class TradingDecisionEngine:
         """
         try:
             # 현재가 조회
-            current_price_info = self.intraday_manager.get_cached_current_price(trading_stock.code)
+            current_price_info = self.intraday_manager.get_cached_current_price(trading_stock.stock_code)
             if not current_price_info:
-                self.logger.error(f"❌ 가상 매도 실패: 현재가 조회 실패 ({trading_stock.code})")
+                self.logger.error(f"❌ 가상 매도 실패: 현재가 조회 실패 ({trading_stock.stock_code})")
                 return
 
             current_price = float(current_price_info.current_price)
@@ -205,20 +205,20 @@ class TradingDecisionEngine:
                         )
                         ORDER BY timestamp ASC
                         LIMIT 1
-                    ''', (trading_stock.code,))
+                    ''', (trading_stock.stock_code,))
 
                     buy_record = cursor.fetchone()
 
                 if not buy_record:
-                    self.logger.warning(f"⚠️ 가상 매도 실패: 매수 기록 없음 ({trading_stock.code})")
+                    self.logger.warning(f"⚠️ 가상 매도 실패: 매수 기록 없음 ({trading_stock.stock_code})")
                     return
 
                 buy_id, buy_price, quantity = buy_record
 
                 # 가상 매도 실행
                 success = self.virtual_trading.execute_virtual_sell(
-                    stock_code=trading_stock.code,
-                    stock_name=trading_stock.name,
+                    stock_code=trading_stock.stock_code,
+                    stock_name=trading_stock.stock_name,
                     price=current_price,
                     quantity=quantity,
                     strategy="ORB",
@@ -230,13 +230,13 @@ class TradingDecisionEngine:
                     profit = (current_price - buy_price) * quantity
                     profit_rate = ((current_price - buy_price) / buy_price) * 100
 
-                    self.logger.info(f"✅ 가상 매도 성공: {trading_stock.code}({trading_stock.name}) "
+                    self.logger.info(f"✅ 가상 매도 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
                                    f"{quantity}주 @{current_price:,.0f}원 "
                                    f"(수익: {profit:,.0f}원, {profit_rate:+.2f}%) - {reason}")
                 else:
-                    self.logger.warning(f"⚠️ 가상 매도 실패: {trading_stock.code}")
+                    self.logger.warning(f"⚠️ 가상 매도 실패: {trading_stock.stock_code}")
 
         except Exception as e:
-            self.logger.error(f"❌ 가상 매도 실행 오류 ({trading_stock.code}): {e}")
+            self.logger.error(f"❌ 가상 매도 실행 오류 ({trading_stock.stock_code}): {e}")
             import traceback
             self.logger.error(traceback.format_exc())

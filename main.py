@@ -993,8 +993,8 @@ class DayTradingBot:
 
             for trading_stock in selected_stocks:
                 try:
-                    stock_code = trading_stock.code
-                    stock_name = trading_stock.name
+                    stock_code = trading_stock.stock_code
+                    stock_name = trading_stock.stock_name
 
                     # 09:00~09:10 구간 1분봉 데이터 조회
                     today = now_kst().strftime('%Y%m%d')
@@ -1021,7 +1021,7 @@ class DayTradingBot:
                         failed_count += 1
 
                 except Exception as e:
-                    self.logger.error(f"❌ {trading_stock.code} ORB 레인지 계산 오류: {e}")
+                    self.logger.error(f"❌ {trading_stock.stock_code} ORB 레인지 계산 오류: {e}")
                     failed_count += 1
 
             self.logger.info(
