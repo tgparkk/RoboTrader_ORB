@@ -144,8 +144,14 @@ class ORBStrategy(TradingStrategy):
                 for data in daily_data
             ])
 
+        # 컬럼명 호환성 처리 (API 전처리로 인해 컬럼명이 변경될 수 있음)
+        close_col = 'close' if 'close' in df.columns else 'stck_clpr'
+        high_col = 'high' if 'high' in df.columns else 'stck_hgpr'
+        low_col = 'low' if 'low' in df.columns else 'stck_lwpr'
+        vol_col = 'volume' if 'volume' in df.columns else 'acml_vol'
+
         # 전일 종가
-        prev_close = float(df.iloc[-1]['stck_clpr'])  # 가장 최근 일봉 종가
+        prev_close = float(df.iloc[-1][close_col])  # 가장 최근 일봉 종가
         current_price = getattr(price_data, 'current_price', prev_close)
 
         # A. 갭 확인 (전일 종가 대비 현재가)
@@ -185,8 +191,8 @@ class ORBStrategy(TradingStrategy):
         # 5일 평균 거래대금
         recent_5d = df.tail(5)
         avg_amount_5d = (
-            recent_5d['acml_vol'].astype(float) *
-            recent_5d['stck_clpr'].astype(float)
+            recent_5d[vol_col].astype(float) *
+            recent_5d[close_col].astype(float)
         ).mean()
 
         if avg_amount_5d < self.config.min_avg_trading_amount_5d:
@@ -199,8 +205,8 @@ class ORBStrategy(TradingStrategy):
         score += self.config.score_weights['sufficient_trading_amount']
         reasons.append(f"충분한 거래대금 ({volume_amount/1e9:.1f}억)")
 
-        # C. ATR 계산
-        atr = self._calculate_atr(df, self.config.atr_period)
+        # C. ATR 계산 (컬럼명 전달)
+        atr = self._calculate_atr(df, self.config.atr_period, high_col, low_col, close_col)
         if atr == 0 or atr > prev_close * 0.1:  # ATR이 종가의 10% 초과 시 제외
             if self.logger:
                 self.logger.debug(
@@ -222,17 +228,27 @@ class ORBStrategy(TradingStrategy):
             metadata={
                 'gap_ratio': gap_ratio,
                 'atr': atr,
-                'avg_volume_5d': recent_5d['acml_vol'].astype(float).mean()
+                'avg_volume_5d': recent_5d[vol_col].astype(float).mean()
             }
         )
 
-    def _calculate_atr(self, df: pd.DataFrame, period: int = 14) -> float:
+    def _calculate_atr(
+        self,
+        df: pd.DataFrame,
+        period: int = 14,
+        high_col: str = 'stck_hgpr',
+        low_col: str = 'stck_lwpr',
+        close_col: str = 'stck_clpr'
+    ) -> float:
         """
         ATR (Average True Range) 계산
 
         Args:
-            df: 일봉 DataFrame (stck_hgpr, stck_lwpr, stck_clpr)
+            df: 일봉 DataFrame
             period: ATR 계산 기간 (기본 14일)
+            high_col: 고가 컬럼명
+            low_col: 저가 컬럼명
+            close_col: 종가 컬럼명
 
         Returns:
             ATR 값
@@ -241,9 +257,9 @@ class ORBStrategy(TradingStrategy):
             return 0.0
 
         df = df.copy()
-        df['high'] = df['stck_hgpr'].astype(float)
-        df['low'] = df['stck_lwpr'].astype(float)
-        df['close'] = df['stck_clpr'].astype(float)
+        df['high'] = df[high_col].astype(float)
+        df['low'] = df[low_col].astype(float)
+        df['close'] = df[close_col].astype(float)
 
         # True Range 계산
         df['prev_close'] = df['close'].shift(1)
@@ -311,7 +327,13 @@ class ORBStrategy(TradingStrategy):
 
             # 4. 거래량 확인 (현재 캔들)
             if hasattr(minute_data, 'empty') and not minute_data.empty:
-                current_volume = float(minute_data.iloc[-1]['acml_vol'])
+                # DataFrame인 경우: 컬럼명 호환성 처리
+                vol_col = 'volume' if 'volume' in minute_data.columns else 'acml_vol'
+                if vol_col not in minute_data.columns:
+                    if self.logger:
+                        self.logger.debug(f"[ORB 전략] ❌ {code}: 거래량 컬럼 없음 ({minute_data.columns.tolist()})")
+                    return None
+                current_volume = float(minute_data.iloc[-1][vol_col])
             elif hasattr(minute_data, '__iter__') and len(list(minute_data)) > 0:
                 data_list = list(minute_data)
                 current_volume = data_list[-1].volume
@@ -490,9 +512,23 @@ class ORBStrategy(TradingStrategy):
                     self.logger.debug(f"[ORB 전략] ❌ {code}: 1분봉 데이터 부족 ({len(df)}개)")
                 return False
 
+            # 컬럼명 호환성 처리 (API 전처리로 인해 컬럼명이 변경될 수 있음)
+            # stck_hgpr → high, stck_lwpr → low, acml_vol → volume
+            high_col = 'high' if 'high' in df.columns else 'stck_hgpr'
+            low_col = 'low' if 'low' in df.columns else 'stck_lwpr'
+            vol_col = 'volume' if 'volume' in df.columns else 'acml_vol'
+
+            # 필수 컬럼 확인
+            if high_col not in df.columns or low_col not in df.columns:
+                if self.logger:
+                    self.logger.error(
+                        f"[ORB 전략] ❌ {code}: 필수 컬럼 없음 (컬럼: {df.columns.tolist()})"
+                    )
+                return False
+
             # ORB 고가/저가
-            orb_high = df['stck_hgpr'].astype(float).max()
-            orb_low = df['stck_lwpr'].astype(float).min()
+            orb_high = df[high_col].astype(float).max()
+            orb_low = df[low_col].astype(float).min()
             range_size = orb_high - orb_low
 
             # 레인지 유효성 검증
@@ -507,7 +543,7 @@ class ORBStrategy(TradingStrategy):
                 return False
 
             # 평균 거래량 계산
-            avg_volume = df['acml_vol'].astype(float).mean()
+            avg_volume = df[vol_col].astype(float).mean() if vol_col in df.columns else 0
 
             # ORB 데이터 저장
             self.orb_data[code] = {
