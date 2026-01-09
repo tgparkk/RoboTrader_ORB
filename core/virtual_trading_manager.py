@@ -33,6 +33,23 @@ class VirtualTradingManager:
     def _initialize_virtual_balance(self):
         """실제 계좌 잔고로 가상 잔고 초기화"""
         try:
+            # API가 초기화되지 않았을 수 있으므로 기본값으로 시작
+            # 나중에 update_virtual_balance_from_account()로 실제 잔고 반영 가능
+            self.virtual_balance = 10000000  # 1천만원
+            self.initial_balance = self.virtual_balance
+            self.virtual_investment_amount = 1000000  # 100만원
+            self.logger.info(f"💰 가상 잔고 기본값 설정: {self.virtual_balance:,.0f}원 (종목당: {self.virtual_investment_amount:,.0f}원)")
+
+        except Exception as e:
+            self.logger.error(f"❌ 가상 잔고 초기화 오류: {e}")
+            # 오류 시 기본값 사용
+            self.virtual_balance = 10000000
+            self.initial_balance = self.virtual_balance
+            self.virtual_investment_amount = 1000000
+
+    def update_virtual_balance_from_account(self):
+        """실제 계좌 잔고로 가상 잔고 업데이트 (API 초기화 후 호출)"""
+        try:
             if self.api_manager:
                 account_info = self.api_manager.get_account_balance()
                 if account_info and hasattr(account_info, 'total_balance'):
@@ -41,21 +58,13 @@ class VirtualTradingManager:
                     self.initial_balance = self.virtual_balance
                     # 종목당 투자 금액도 잔고에 맞춰 조정
                     self.virtual_investment_amount = min(1000000, self.virtual_balance * 0.1)  # 잔고의 10% 또는 최대 100만원
-                    self.logger.info(f"💰 가상 잔고 초기화: {self.virtual_balance:,.0f}원 (종목당: {self.virtual_investment_amount:,.0f}원)")
-                    return
-            
-            # API 조회 실패 시 기본값 사용
-            self.virtual_balance = 10000000  # 1천만원
-            self.initial_balance = self.virtual_balance
-            self.virtual_investment_amount = 1000000  # 100만원
-            self.logger.info(f"💰 가상 잔고 기본값 설정: {self.virtual_balance:,.0f}원 (종목당: {self.virtual_investment_amount:,.0f}원)")
-            
+                    self.logger.info(f"💰 가상 잔고 실계좌 반영: {self.virtual_balance:,.0f}원 (종목당: {self.virtual_investment_amount:,.0f}원)")
+                    return True
+            return False
+
         except Exception as e:
-            self.logger.error(f"❌ 가상 잔고 초기화 오류: {e}")
-            # 오류 시 기본값 사용
-            self.virtual_balance = 10000000
-            self.initial_balance = self.virtual_balance
-            self.virtual_investment_amount = 1000000
+            self.logger.error(f"❌ 가상 잔고 실계좌 반영 오류: {e}")
+            return False
     
     def update_virtual_balance(self, amount: float, transaction_type: str):
         """

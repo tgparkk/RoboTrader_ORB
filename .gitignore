@@ -137,6 +137,8 @@ data/
 # 런타임 파일
 bot.pid
 stock_list.json
+memory_minute_data_*.txt
+cache/
 
 # 분석 결과
 analysis_results/

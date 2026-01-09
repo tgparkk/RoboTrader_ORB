@@ -132,25 +132,40 @@ class TradingDecisionEngine:
 
         return False, ""
 
-    async def execute_virtual_buy(self, trading_stock, data, reason: str):
+    async def execute_virtual_buy(self, trading_stock, data, reason: str, buy_price: float = None, quantity: int = None):
         """
-        가상 매수 실행
+        가상 매수 실행 (실제 주문 제외, 모든 로직 실행)
 
         Args:
             trading_stock: 거래 종목 정보
             data: 3분봉 데이터
             reason: 매수 사유
+            buy_price: 매수 가격 (None이면 현재가 사용)
+            quantity: 매수 수량 (None이면 자동 계산)
+
+        Returns:
+            int: 매수 기록 ID (성공시) 또는 None (실패시)
         """
         try:
-            current_price = float(data['close'].iloc[-1]) if data is not None and len(data) > 0 else 0
+            # 가격 결정
+            if buy_price is None:
+                current_price = float(data['close'].iloc[-1]) if data is not None and len(data) > 0 else 0
+            else:
+                current_price = buy_price
+
             if current_price <= 0:
                 self.logger.error(f"❌ 가상 매수 실패: 유효하지 않은 가격 ({current_price})")
-                return
+                return None
 
-            # 가상 매매 수량 계산
-            quantity = self.virtual_trading.get_max_quantity(current_price)
+            # 수량 결정
+            if quantity is None:
+                quantity = self.virtual_trading.get_max_quantity(current_price)
 
-            # 가상 매수 실행
+            if quantity <= 0:
+                self.logger.error(f"❌ 가상 매수 실패: 유효하지 않은 수량 ({quantity})")
+                return None
+
+            # 가상 매수 실행 및 DB 기록
             buy_id = self.virtual_trading.execute_virtual_buy(
                 stock_code=trading_stock.stock_code,
                 stock_name=trading_stock.stock_name,
@@ -161,82 +176,112 @@ class TradingDecisionEngine:
             )
 
             if buy_id:
+                # 포지션 정보 업데이트 (손절/익절가 계산)
+                if trading_stock.position:
+                    trading_stock.position.avg_price = current_price
+                    trading_stock.position.quantity = quantity
+
+                    # 손절가/익절가 계산 (전략에서 가져온 값 또는 기본 비율 사용)
+                    if hasattr(trading_stock, 'stop_loss_price') and trading_stock.stop_loss_price:
+                        pass  # 이미 설정됨
+                    else:
+                        # 기본 손절가 (2.5% 손실)
+                        trading_stock.stop_loss_price = current_price * 0.975
+
+                    if hasattr(trading_stock, 'profit_target_price') and trading_stock.profit_target_price:
+                        pass  # 이미 설정됨
+                    else:
+                        # 기본 익절가 (3.5% 수익)
+                        trading_stock.profit_target_price = current_price * 1.035
+
                 self.logger.info(f"✅ 가상 매수 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
                                f"{quantity}주 @{current_price:,.0f}원 - {reason}")
+                return buy_id
             else:
-                self.logger.warning(f"⚠️ 가상 매수 실패: {trading_stock.stock_code}")
+                self.logger.warning(f"⚠️ 가상 매수 DB 저장 실패: {trading_stock.stock_code}")
+                return None
 
         except Exception as e:
             self.logger.error(f"❌ 가상 매수 실행 오류 ({trading_stock.stock_code}): {e}")
             import traceback
             self.logger.error(traceback.format_exc())
+            return None
 
     async def execute_virtual_sell(self, trading_stock, data, reason: str):
         """
-        가상 매도 실행
+        가상 매도 실행 (실제 주문 제외, 모든 로직 실행)
 
         Args:
             trading_stock: 거래 종목 정보
             data: 데이터 (사용 안 함, 호환성 유지용)
             reason: 매도 사유
+
+        Returns:
+            bool: 성공 여부
         """
         try:
             # 현재가 조회
             current_price_info = self.intraday_manager.get_cached_current_price(trading_stock.stock_code)
             if not current_price_info:
                 self.logger.error(f"❌ 가상 매도 실패: 현재가 조회 실패 ({trading_stock.stock_code})")
-                return
+                return False
 
             current_price = float(current_price_info.current_price)
 
             # DB에서 가상 매수 기록 조회
-            if self.db_manager:
-                # 직접 SQL 쿼리로 미체결 포지션 조회
-                import sqlite3
-                with sqlite3.connect(self.db_manager.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        SELECT id, price, quantity
-                        FROM virtual_trading_records
-                        WHERE stock_code = ? AND action = 'BUY'
-                        AND id NOT IN (
-                            SELECT buy_record_id FROM virtual_trading_records
-                            WHERE action = 'SELL' AND buy_record_id IS NOT NULL
-                        )
-                        ORDER BY timestamp ASC
-                        LIMIT 1
-                    ''', (trading_stock.stock_code,))
+            if not self.db_manager:
+                self.logger.error(f"❌ 가상 매도 실패: DB 매니저 없음")
+                return False
 
-                    buy_record = cursor.fetchone()
+            # 직접 SQL 쿼리로 미체결 포지션 조회
+            import sqlite3
+            with sqlite3.connect(self.db_manager.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT id, price, quantity
+                    FROM virtual_trading_records
+                    WHERE stock_code = ? AND action = 'BUY'
+                    AND id NOT IN (
+                        SELECT buy_record_id FROM virtual_trading_records
+                        WHERE action = 'SELL' AND buy_record_id IS NOT NULL
+                    )
+                    ORDER BY timestamp ASC
+                    LIMIT 1
+                ''', (trading_stock.stock_code,))
 
-                if not buy_record:
-                    self.logger.warning(f"⚠️ 가상 매도 실패: 매수 기록 없음 ({trading_stock.stock_code})")
-                    return
+                buy_record = cursor.fetchone()
 
-                buy_id, buy_price, quantity = buy_record
+            if not buy_record:
+                self.logger.warning(f"⚠️ 가상 매도 실패: 매수 기록 없음 ({trading_stock.stock_code})")
+                return False
 
-                # 가상 매도 실행
-                success = self.virtual_trading.execute_virtual_sell(
-                    stock_code=trading_stock.stock_code,
-                    stock_name=trading_stock.stock_name,
-                    price=current_price,
-                    quantity=quantity,
-                    strategy="ORB",
-                    reason=reason,
-                    buy_record_id=buy_id
-                )
+            buy_id, buy_price, quantity = buy_record
 
-                if success:
-                    profit = (current_price - buy_price) * quantity
-                    profit_rate = ((current_price - buy_price) / buy_price) * 100
+            # 가상 매도 실행 및 DB 기록
+            success = self.virtual_trading.execute_virtual_sell(
+                stock_code=trading_stock.stock_code,
+                stock_name=trading_stock.stock_name,
+                price=current_price,
+                quantity=quantity,
+                strategy="ORB",
+                reason=reason,
+                buy_record_id=buy_id
+            )
 
-                    self.logger.info(f"✅ 가상 매도 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
-                                   f"{quantity}주 @{current_price:,.0f}원 "
-                                   f"(수익: {profit:,.0f}원, {profit_rate:+.2f}%) - {reason}")
-                else:
-                    self.logger.warning(f"⚠️ 가상 매도 실패: {trading_stock.stock_code}")
+            if success:
+                profit = (current_price - buy_price) * quantity
+                profit_rate = ((current_price - buy_price) / buy_price) * 100
+
+                self.logger.info(f"✅ 가상 매도 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
+                               f"{quantity}주 @{current_price:,.0f}원 "
+                               f"(수익: {profit:,.0f}원, {profit_rate:+.2f}%) - {reason}")
+                return True
+            else:
+                self.logger.warning(f"⚠️ 가상 매도 DB 저장 실패: {trading_stock.stock_code}")
+                return False
 
         except Exception as e:
             self.logger.error(f"❌ 가상 매도 실행 오류 ({trading_stock.stock_code}): {e}")
             import traceback
             self.logger.error(traceback.format_exc())
+            return False

@@ -172,6 +172,14 @@ class DayTradingBot:
                 self.logger.warning("⚠️ 잔고 조회 실패 - 기본값 1천만원으로 설정")
                 self.fund_manager.update_total_funds(10000000)
 
+            # 1.6. 가상거래 잔고 초기화 (API 초기화 후)
+            if self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False:
+                virtual_manager = self.decision_engine.virtual_trading
+                if virtual_manager.update_virtual_balance_from_account():
+                    self.logger.info("✅ 가상거래 잔고 실계좌 반영 완료")
+                else:
+                    self.logger.info("✅ 가상거래 잔고 기본값 사용")
+
             # 2. 시장 상태 확인
             market_status = get_market_status()
             self.logger.info(f"📊 현재 시장 상태: {market_status}")
@@ -457,36 +465,55 @@ class DayTradingBot:
                 if current_stock:
                     self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
                 
-                # [리얼매매 코드 - 활성화]
-                # [실제 매매 코드 - 주석처리]
-                # try:
-                #     # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
-                #     raw_candle_time = data_3min['datetime'].iloc[-1]
-                #     minute_normalized = (raw_candle_time.minute // 3) * 3
-                #     current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
-                #     await self.decision_engine.execute_real_buy(
-                #         trading_stock,
-                #         buy_reason,
-                #         buy_info['buy_price'],
-                #         buy_info['quantity'],
-                #         candle_time=current_candle_time
-                #     )
-                #     # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
-                #     self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
-                # except Exception as e:
-                #     self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
+                # 가상거래 모드 확인
+                use_virtual_trading = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
 
-                # [가상매매 코드 - 활성화]
-                try:
-                    await self.decision_engine.execute_virtual_buy(trading_stock, data_3min, buy_reason)
-                    # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
+                if use_virtual_trading:
+                    # [가상매매 모드]
                     try:
-                        self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
-                    except Exception:
-                        pass
-                    self.logger.info(f"🔥 가상 매수 완료 처리: {stock_code}({stock_name}) - {buy_reason}")
-                except Exception as e:
-                    self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
+                        # 가상 매수 실행 및 DB 기록
+                        buy_record_id = await self.decision_engine.execute_virtual_buy(
+                            trading_stock,
+                            data_3min,
+                            buy_reason,
+                            buy_price=buy_info['buy_price'],
+                            quantity=buy_info['quantity']
+                        )
+
+                        if buy_record_id:
+                            # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
+                            self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
+
+                            # 가상 포지션 정보 설정 (손절/익절가 계산용)
+                            if trading_stock.position:
+                                trading_stock.position.virtual_buy_id = buy_record_id
+
+                            self.logger.info(f"🔥 가상 매수 완료: {stock_code}({stock_name}) "
+                                           f"{buy_info['quantity']}주 @{buy_info['buy_price']:,.0f}원 - {buy_reason}")
+                        else:
+                            self.logger.warning(f"⚠️ 가상 매수 실패: {stock_code}({stock_name})")
+                    except Exception as e:
+                        self.logger.error(f"❌ 가상 매수 처리 오류: {e}")
+                        import traceback
+                        self.logger.error(traceback.format_exc())
+                else:
+                    # [실제 매매 모드]
+                    try:
+                        # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
+                        raw_candle_time = data_3min['datetime'].iloc[-1]
+                        minute_normalized = (raw_candle_time.minute // 3) * 3
+                        current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
+                        await self.decision_engine.execute_real_buy(
+                            trading_stock,
+                            buy_reason,
+                            buy_info['buy_price'],
+                            buy_info['quantity'],
+                            candle_time=current_candle_time
+                        )
+                        # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+                        self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
+                    except Exception as e:
+                        self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
                     
             else:
                 #self.logger.debug(f"📊 {stock_code}({stock_name}) 매수 신호 없음")
@@ -520,19 +547,30 @@ class DayTradingBot:
                 # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
                 if success:
-                    # [실제 매도 주문 실행 - 주석처리]
-                    # try:
-                    #     await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
-                    #     self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
-                    # except Exception as e:
-                    #     self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
+                    # 가상거래 모드 확인
+                    use_virtual_trading = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
 
-                    # [가상매매 코드 - 활성화]
-                    try:
-                        await self.decision_engine.execute_virtual_sell(trading_stock, None, sell_reason)
-                        self.logger.info(f"📉 가상 매도 완료 처리: {stock_code}({stock_name}) - {sell_reason}")
-                    except Exception as e:
-                        self.logger.error(f"❌ 가상 매도 처리 오류: {e}")
+                    if use_virtual_trading:
+                        # [가상매매 모드]
+                        try:
+                            sell_success = await self.decision_engine.execute_virtual_sell(trading_stock, None, sell_reason)
+                            if sell_success:
+                                self.logger.info(f"📉 가상 매도 완료: {stock_code}({stock_name}) - {sell_reason}")
+                                # 상태를 COMPLETED로 변경하여 거래 종료
+                                self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 매도 체결")
+                            else:
+                                self.logger.warning(f"⚠️ 가상 매도 실패: {stock_code}({stock_name})")
+                        except Exception as e:
+                            self.logger.error(f"❌ 가상 매도 처리 오류: {e}")
+                            import traceback
+                            self.logger.error(traceback.format_exc())
+                    else:
+                        # [실제 매매 모드]
+                        try:
+                            await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
+                            self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
+                        except Exception as e:
+                            self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
     

@@ -18,7 +18,8 @@
     "stop_loss_ratio": 0.025,
     "take_profit_ratio": 0.035,
     "max_daily_loss": 0.1,
-    "use_dynamic_profit_loss": false
+    "use_dynamic_profit_loss": false,
+    "use_virtual_trading": true
   },
   "strategy": {
     "candidate_selection": "",

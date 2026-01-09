@@ -71,7 +71,15 @@ def setup_logger(
     file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
-    # 콘솔 핸들러
+    # 콘솔 핸들러 (Windows cp949 인코딩 문제 방지)
+    try:
+        # UTF-8로 콘솔 출력 강제 설정
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        pass  # 이미 설정되었거나 불가능한 경우 무시
+
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
