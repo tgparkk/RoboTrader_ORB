@@ -33,6 +33,54 @@ def get_inquire_price(div_code: str = "J", itm_no: str = "", tr_cont: str = "",
         logger.error("주식현재가 조회 실패")
         return None
 
+def get_current_price_info(stock_code: str) -> Optional[Dict[str, Any]]:
+    """
+    매도 판단용 실시간 현재가 조회 (유틸리티 함수)
+    
+    get_inquire_price API를 사용하여 매도 판단에 필요한 실시간 현재가 정보를 제공합니다.
+    
+    Args:
+        stock_code: 종목코드
+        
+    Returns:
+        Dict: 현재가 정보 또는 None
+            - current_price: 현재가
+            - change_rate: 전일대비율
+            - volume: 거래량
+            - high: 고가
+            - low: 저가 등
+    """
+    try:
+        # J (KRX) 시장으로 현재가 조회
+        price_data = get_inquire_price(div_code="J", itm_no=stock_code)
+        
+        if price_data is None or price_data.empty:
+            logger.debug(f"❌ {stock_code} 현재가 조회 실패 (매도용)")
+            return None
+        
+        # 첫 번째 행의 데이터 추출
+        row = price_data.iloc[0]
+        
+        # 주요 현재가 정보 추출 (필드명은 실제 API 응답에 따라 조정 필요)
+        current_price_info = {
+            'stock_code': stock_code,
+            'current_price': float(row.get('stck_prpr', 0)),  # 현재가
+            'change_rate': float(row.get('prdy_ctrt', 0)),   # 전일대비율
+            'change_price': float(row.get('prdy_vrss', 0)),  # 전일대비
+            'volume': int(row.get('acml_vol', 0)),           # 누적거래량
+            'high_price': float(row.get('stck_hgpr', 0)),    # 고가
+            'low_price': float(row.get('stck_lwpr', 0)),     # 저가
+            'open_price': float(row.get('stck_oprc', 0)),    # 시가
+            'prev_close': float(row.get('stck_sdpr', 0)),    # 전일종가
+            'market_cap': int(row.get('hts_avls', 0)),       # 시가총액
+            'update_time': now_kst()
+        }
+        
+        return current_price_info
+        
+    except Exception as e:
+        logger.error(f"❌ {stock_code} 매도용 현재가 조회 오류: {e}")
+        return None
 
 def get_inquire_ccnl(div_code: str = "J", itm_no: str = "", tr_cont: str = "",
                      FK100: str = "", NK100: str = "") -> Optional[pd.DataFrame]:

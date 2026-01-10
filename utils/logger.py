@@ -73,10 +73,18 @@ def setup_logger(
 
     # 콘솔 핸들러 (Windows cp949 인코딩 문제 방지)
     try:
-        # UTF-8로 콘솔 출력 강제 설정
-        import io
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+        # UTF-8로 콘솔 출력 강제 설정 (이미 설정된 경우 건너뜀)
+        if not hasattr(sys.stdout, 'encoding') or sys.stdout.encoding.lower() != 'utf-8':
+            import io
+            if isinstance(sys.stdout, io.TextIOWrapper) and sys.stdout.name == '<stdout>':
+                 # detach()를 사용하면 기존 버퍼가 닫힐 위험이 있으므로, 안전하게 감싸기만 시도
+                 # 하지만 여기서는 이미 래핑된 경우를 감지하기 어려우므로 간단히 encoding 체크만 수행
+                 pass
+            # 주의: sys.stdout 재설정은 프로세스당 한 번만 수행하는 것이 안전함.
+            # 여기서는 로거 설정 때마다 호출되므로, 부작용 방지를 위해 주석 처리하거나 안전 장치 필요
+            # sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+            # sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+            pass 
     except Exception:
         pass  # 이미 설정되었거나 불가능한 경우 무시
 

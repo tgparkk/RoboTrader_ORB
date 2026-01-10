@@ -27,6 +27,7 @@ from config.settings import load_trading_config
 from utils.logger import setup_logger
 from utils.korean_time import now_kst, get_market_status, is_market_open, KST
 from config.market_hours import MarketHours
+from scripts.collect_extended_data import ExtendedDataCollector
 # from post_market_chart_generator import PostMarketChartGenerator  # 파일 없음
 
 
@@ -34,51 +35,69 @@ class DayTradingBot:
     """주식 단타 거래 봇"""
     
     def __init__(self):
-        self.logger = setup_logger(__name__)
-        self.is_running = False
-        self.pid_file = Path("bot.pid")
-        self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
-        
-        # 프로세스 중복 실행 방지
-        self._check_duplicate_process()
-        
-        # 설정 초기화
-        self.config = self._load_config()
-        
-        # 핵심 모듈 초기화
-        self.api_manager = KISAPIManager()
-        self.telegram = TelegramIntegration(trading_bot=self)
-        self.data_collector = RealTimeDataCollector(self.config, self.api_manager)
-        self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
-        self.candidate_selector = CandidateSelector(
-            self.config,
-            self.api_manager,
-            strategy_name="orb"
-        )
-        self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
-        self.trading_manager = TradingStockManager(
-            self.intraday_manager, self.data_collector, self.order_manager, self.telegram
-        )  # 🆕 거래 상태 통합 관리자
-        self.db_manager = DatabaseManager()
-        self.decision_engine = TradingDecisionEngine(
-            db_manager=self.db_manager,
-            telegram_integration=self.telegram,
-            trading_manager=self.trading_manager,
-            api_manager=self.api_manager,
-            intraday_manager=self.intraday_manager,
-            strategy_name="orb"
-        )  # 🆕 매매 판단 엔진
-
-        # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
-        self.trading_manager.set_decision_engine(self.decision_engine)
-
-        self.fund_manager = FundManager()  # 🆕 자금 관리자
-        self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
-        
-        
-        # 신호 핸들러 등록
-        signal.signal(signal.SIGINT, self._signal_handler)
-        signal.signal(signal.SIGTERM, self._signal_handler)
+        try:
+            self.logger = setup_logger(__name__)
+            self.is_running = False
+            self.pid_file = Path("bot.pid")
+            self._last_eod_liquidation_date = None  # 장마감 일괄청산 실행 일자
+            
+            # 프로세스 중복 실행 방지
+            self._check_duplicate_process()
+            
+            # 설정 초기화
+            self.config = self._load_config()
+            
+            # 핵심 모듈 초기화
+            self.api_manager = KISAPIManager()
+            self.telegram = TelegramIntegration(trading_bot=self)
+            self.data_collector = RealTimeDataCollector(self.config, self.api_manager)
+            self.order_manager = OrderManager(self.config, self.api_manager, self.telegram)
+            self.candidate_selector = CandidateSelector(
+                self.config,
+                self.api_manager,
+                strategy_name="orb"
+            )
+            
+            self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
+            
+            self.trading_manager = TradingStockManager(
+                self.intraday_manager, self.data_collector, self.order_manager, self.telegram
+            )  # 🆕 거래 상태 통합 관리자
+            
+            self.db_manager = DatabaseManager()
+            
+            self.decision_engine = TradingDecisionEngine(
+                db_manager=self.db_manager,
+                telegram_integration=self.telegram,
+                trading_manager=self.trading_manager,
+                api_manager=self.api_manager,
+                intraday_manager=self.intraday_manager,
+                strategy_name="orb"
+            )  # 🆕 매매 판단 엔진
+    
+            # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
+            self.trading_manager.set_decision_engine(self.decision_engine)
+    
+            self.fund_manager = FundManager()  # 🆕 자금 관리자
+            self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
+            
+            # 🆕 과거 데이터 수집기 (기존 매니저 주입)
+            self.extended_collector = ExtendedDataCollector(
+                api_manager=self.api_manager,
+                db_manager=self.db_manager
+            )
+            self._last_extended_collection_date = None # 🆕 마지막 수집 날짜
+            
+            
+            # 신호 핸들러 등록
+            signal.signal(signal.SIGINT, self._signal_handler)
+            signal.signal(signal.SIGTERM, self._signal_handler)
+            
+        except Exception as e:
+            print(f"CRITICAL ERROR in DayTradingBot.__init__: {e}")
+            import traceback
+            traceback.print_exc()
+            raise e
 
     def _round_to_tick(self, price: float) -> float:
         """KRX 정확한 호가단위에 맞게 반올림 - kis_order_api 함수 사용"""
@@ -634,6 +653,15 @@ class DayTradingBot:
                         await self._update_intraday_data()
                         last_intraday_update = current_time
                 
+                # 🆕 과거 후보 종목 데이터 추가 수집 (16:10 실행)
+                if current_time.hour == 16 and current_time.minute >= 10:
+                    current_date = current_time.date()
+                    if self._last_extended_collection_date != current_date:
+                        self.logger.info("🕒 16:10 정기 작업: 과거 후보 종목 데이터 추가 수집 시작")
+                        await self.extended_collector.collect_data()
+                        self._last_extended_collection_date = current_date
+                        self.logger.info("✅ 16:10 정기 작업 완료")
+
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 
                 # 🆕 차트 생성 카운터 매일 리셋 (주석처리)
@@ -817,12 +845,11 @@ class DayTradingBot:
         """DB에서 오늘 날짜의 후보 종목 복원"""
         try:
             import sqlite3
-            from pathlib import Path
             
-            # DB 경로
-            db_path = Path(__file__).parent / "data" / "robotrader.db"
-            if not db_path.exists():
-                self.logger.info("📊 DB 파일 없음 - 후보 종목 복원 건너뜀")
+            # DB 경로 (db_manager 활용)
+            db_path = self.db_manager.db_path
+            if not Path(db_path).exists():
+                self.logger.info(f"📊 DB 파일 없음({db_path}) - 후보 종목 복원 건너뜀")
                 return
             
             # 오늘 날짜
@@ -1316,10 +1343,17 @@ class DayTradingBot:
 
 async def main():
     """메인 함수"""
-    bot = DayTradingBot()
+    try:
+        bot = DayTradingBot()
+    except Exception as e:
+        print(f"❌ DayTradingBot 생성 실패: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     
     # 시스템 초기화
     if not await bot.initialize():
+        print("❌ 시스템 초기화 실패로 종료")
         sys.exit(1)
     
     # 일일 거래 사이클 실행
