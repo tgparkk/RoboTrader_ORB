@@ -58,7 +58,7 @@ class TradingDecisionEngine:
         전략이 설정되어 있으면 전략 사용, 없으면 False 반환
 
         Returns:
-            (매수여부, 사유, {'buy_price': 가격, 'quantity': 수량})
+            (매수여부, 사유, {'buy_price': 가격, 'quantity': 수량, 'max_buy_amount': 최대 투자금})
         """
         buy_info = {'buy_price': 0, 'quantity': 0, 'max_buy_amount': 0}
 
@@ -69,6 +69,9 @@ class TradingDecisionEngine:
         try:
             # 현재가 추출
             current_price = float(data['close'].iloc[-1]) if data is not None and len(data) > 0 else 0
+
+            if current_price <= 0:
+                return False, "유효하지 않은 가격", buy_info
 
             # 전략에 매수 신호 요청
             buy_signal = await self.strategy.generate_buy_signal(
@@ -83,14 +86,67 @@ class TradingDecisionEngine:
 
             # 매수 정보 구성
             buy_info['buy_price'] = current_price
-            # 수량 계산은 기존 로직 사용 (리스크 관리와 연동)
-            # TODO: 수량 계산 로직 구현 필요
+
+            # 수량 계산 (가상거래 모드 여부에 따라 다른 로직 적용)
+            max_buy_amount = self._calculate_max_buy_amount()
+            quantity = self._calculate_quantity(current_price, max_buy_amount)
+
+            buy_info['quantity'] = quantity
+            buy_info['max_buy_amount'] = max_buy_amount
 
             return True, buy_signal.reason, buy_info
 
         except Exception as e:
             self.logger.error(f"매수 판단 실패 ({trading_stock.stock_code}): {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return False, f"분석 오류: {e}", buy_info
+
+    def _calculate_max_buy_amount(self) -> float:
+        """
+        최대 매수 가능 금액 계산
+
+        가상거래 모드: 가상 잔고에서 종목당 투자 금액 반환
+        실거래 모드: 실제 계좌 잔고에서 계산
+
+        Returns:
+            float: 최대 매수 가능 금액
+        """
+        try:
+            # 가상거래 관리자에서 종목당 투자 금액 가져오기
+            max_amount = self.virtual_trading.virtual_investment_amount
+            virtual_balance = self.virtual_trading.virtual_balance
+
+            # 가상 잔고보다 투자 금액이 크면 잔고만큼만 사용
+            return min(max_amount, virtual_balance)
+
+        except Exception as e:
+            self.logger.error(f"최대 매수 금액 계산 오류: {e}")
+            return 0
+
+    def _calculate_quantity(self, price: float, max_buy_amount: float) -> int:
+        """
+        매수 수량 계산
+
+        Args:
+            price: 주가
+            max_buy_amount: 최대 매수 가능 금액
+
+        Returns:
+            int: 매수 수량
+        """
+        try:
+            if price <= 0 or max_buy_amount <= 0:
+                return 0
+
+            # 최대 수량 계산
+            quantity = int(max_buy_amount / price)
+
+            return max(0, quantity)
+
+        except Exception as e:
+            self.logger.error(f"수량 계산 오류: {e}")
+            return 0
 
     async def analyze_sell_decision(self, trading_stock, data) -> Tuple[bool, str]:
         """
