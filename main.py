@@ -298,10 +298,20 @@ class DayTradingBot:
                     orb_range_calculated = True
 
                 # 매매 판단 시스템 실행 (5초 주기)
-                # 실시간 잔고 조회 후 자금 관리자 업데이트
-                balance_info = self.api_manager.get_account_balance()
-                if balance_info:
-                    self.fund_manager.update_total_funds(float(balance_info.account_balance))
+                # 자금 관리자 업데이트 (가상거래 모드 분기)
+                use_virtual = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
+
+                if use_virtual:
+                    # 가상거래 모드: 가상 잔고 사용
+                    virtual_manager = self.decision_engine.virtual_trading
+                    virtual_balance = virtual_manager.get_virtual_balance()
+                    self.fund_manager.update_total_funds(virtual_balance)
+                    self.logger.debug(f"💰 가상거래 잔고: {virtual_balance:,.0f}원")
+                else:
+                    # 실거래 모드: 실시간 잔고 조회
+                    balance_info = self.api_manager.get_account_balance()
+                    if balance_info:
+                        self.fund_manager.update_total_funds(float(balance_info.account_balance))
 
                 # 현재 가용 자금 계산 (총 자금의 10% 기준)
                 fund_status = self.fund_manager.get_status()
@@ -507,6 +517,10 @@ class DayTradingBot:
                             if trading_stock.position:
                                 trading_stock.position.virtual_buy_id = buy_record_id
 
+                            # 🆕 가상 잔고를 fund_manager에 동기화 (가상/실거래 통합 관리)
+                            virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
+                            self.fund_manager.update_total_funds(virtual_balance)
+
                             self.logger.info(f"🔥 가상 매수 완료: {stock_code}({stock_name}) "
                                            f"{buy_info['quantity']}주 @{buy_info['buy_price']:,.0f}원 - {buy_reason}")
                         else:
@@ -574,6 +588,10 @@ class DayTradingBot:
                         try:
                             sell_success = await self.decision_engine.execute_virtual_sell(trading_stock, None, sell_reason)
                             if sell_success:
+                                # 🆕 가상 잔고를 fund_manager에 동기화 (가상/실거래 통합 관리)
+                                virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
+                                self.fund_manager.update_total_funds(virtual_balance)
+
                                 self.logger.info(f"📉 가상 매도 완료: {stock_code}({stock_name}) - {sell_reason}")
                                 # 상태를 COMPLETED로 변경하여 거래 종료
                                 self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 매도 체결")
@@ -1142,10 +1160,19 @@ class DayTradingBot:
             should_stop_buy = MarketHours.should_stop_buying('KRX', current_time)
 
             if not should_stop_buy:
-                # 가용 자금 계산
-                balance_info = self.api_manager.get_account_balance()
-                if balance_info:
-                    self.fund_manager.update_total_funds(float(balance_info.account_balance))
+                # 가용 자금 계산 (가상거래 모드 분기)
+                use_virtual = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
+
+                if use_virtual:
+                    # 가상거래 모드: 가상 잔고 사용
+                    virtual_manager = self.decision_engine.virtual_trading
+                    virtual_balance = virtual_manager.get_virtual_balance()
+                    self.fund_manager.update_total_funds(virtual_balance)
+                else:
+                    # 실거래 모드: 실시간 잔고 조회
+                    balance_info = self.api_manager.get_account_balance()
+                    if balance_info:
+                        self.fund_manager.update_total_funds(float(balance_info.account_balance))
 
                 fund_status = self.fund_manager.get_status()
                 available_funds = fund_status['available_funds']
@@ -1160,6 +1187,10 @@ class DayTradingBot:
 
                     for trading_stock in buy_candidates:
                         await self._analyze_buy_decision(trading_stock, available_funds)
+
+                        # 🆕 매수 후 가용 자금 갱신 (순차적 자금 관리)
+                        fund_status = self.fund_manager.get_status()
+                        available_funds = fund_status['available_funds']
 
         except Exception as e:
             self.logger.error(f"❌ 장중 종목 실시간 데이터 업데이트 오류: {e}")

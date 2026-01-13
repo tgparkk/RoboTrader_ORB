@@ -32,7 +32,7 @@ class ORBStrategyConfig:
 
     # 레인지 검증 기준
     min_range_ratio: float = 0.003  # 최소 레인지 비율 (가격의 0.3%)
-    max_range_ratio: float = 0.020  # 최대 레인지 비율 (가격의 2%)
+    max_range_ratio: float = 0.025  # 최대 레인지 비율 (가격의 2.5%)
 
     # ===== ATR 설정 =====
 
