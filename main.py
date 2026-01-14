@@ -182,22 +182,31 @@ class DayTradingBot:
             self.logger.info("✅ API 매니저 초기화 완료")
 
             # 1.5. 자금 관리자 초기화 (API 초기화 후)
-            balance_info = self.api_manager.get_account_balance()
-            if balance_info:
-                total_funds = float(balance_info.account_balance) if hasattr(balance_info, 'account_balance') else 10000000
-                self.fund_manager.update_total_funds(total_funds)
-                self.logger.info(f"💰 자금 관리자 초기화 완료: {total_funds:,.0f}원")
-            else:
-                self.logger.warning("⚠️ 잔고 조회 실패 - 기본값 1천만원으로 설정")
+            # 🆕 가상 매매 모드일 경우 강제로 1000만원 설정
+            use_virtual = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
+            
+            if use_virtual:
+                self.logger.info("💰 가상 매매 모드: 초기 자금을 10,000,000원으로 고정합니다.")
                 self.fund_manager.update_total_funds(10000000)
-
-            # 1.6. 가상거래 잔고 초기화 (API 초기화 후)
-            if self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False:
-                virtual_manager = self.decision_engine.virtual_trading
-                if virtual_manager.update_virtual_balance_from_account():
-                    self.logger.info("✅ 가상거래 잔고 실계좌 반영 완료")
+                # 가상 거래 매니저 잔고도 강제 설정
+                if hasattr(self.decision_engine, 'virtual_trading'):
+                    self.decision_engine.virtual_trading.virtual_balance = 10000000
+                    self.decision_engine.virtual_trading.initial_balance = 10000000
+                    self.decision_engine.virtual_trading.virtual_investment_amount = 1000000  # 종목당 100만원
+            else:
+                balance_info = self.api_manager.get_account_balance()
+                if balance_info:
+                    total_funds = float(balance_info.account_balance) if hasattr(balance_info, 'account_balance') else 10000000
+                    self.fund_manager.update_total_funds(total_funds)
+                    self.logger.info(f"💰 자금 관리자 초기화 완료: {total_funds:,.0f}원")
                 else:
-                    self.logger.info("✅ 가상거래 잔고 기본값 사용")
+                    self.logger.warning("⚠️ 잔고 조회 실패 - 기본값 1천만원으로 설정")
+                    self.fund_manager.update_total_funds(10000000)
+
+            # 1.6. 가상거래 잔고 초기화 (API 초기화 후) - 위에서 처리했으므로 실거래 모드에서만 로깅
+            if not use_virtual and (self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False):
+                 # 설정 파일엔 켜져있으나 위 로직에서 use_virtual이 False인 경우 (거의 없음)
+                 pass
 
             # 2. 시장 상태 확인
             market_status = get_market_status()
@@ -259,19 +268,15 @@ class DayTradingBot:
     async def _trading_decision_task(self):
         """매매 의사결정 태스크"""
         try:
-
-            #await self._check_condition_search()
-
             self.logger.info("🤖 매매 의사결정 태스크 시작")
 
-            last_condition_check = datetime(2000, 1, 1, tzinfo=KST)  # 초기값
             orb_range_calculated = False  # ORB 레인지 계산 완료 플래그
 
             while self.is_running:
                 if not is_market_open():
                     await asyncio.sleep(60)  # 장 마감 시 1분 대기
                     continue
-                
+
                 current_time = now_kst()
 
                 # 🚨 장마감 시간 시장가 일괄매도 체크 (한 번만 실행) - 동적 시간 적용
@@ -284,13 +289,6 @@ class DayTradingBot:
                     # (장마감 후 데이터 저장을 위해 루프 계속 실행)
                     await asyncio.sleep(5)
                     continue
-                
-                # 🆕 장중 조건검색 체크 (장 시작 ~ 청산 시간 전까지) - 동적 시간 적용
-                if (is_market_open(current_time) and
-                    not MarketHours.is_eod_liquidation_time('KRX', current_time) and
-                    (current_time - last_condition_check).total_seconds() >= 60):  # 60초
-                    await self._check_condition_search()
-                    last_condition_check = current_time
 
                 # 🆕 ORB 레인지 계산 (09:10 이후 한 번만 실행)
                 if not orb_range_calculated and current_time.time() >= time(9, 10):
@@ -302,9 +300,10 @@ class DayTradingBot:
                 use_virtual = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
 
                 if use_virtual:
-                    # 가상거래 모드: 가상 잔고 사용
+                    # 가상거래 모드: 가상 잔고 사용 (1000만원 고정 로직 유지)
                     virtual_manager = self.decision_engine.virtual_trading
                     virtual_balance = virtual_manager.get_virtual_balance()
+                    # 실계좌 동기화 로직 제거됨 (초기화 시 1000만원 설정값 유지)
                     self.fund_manager.update_total_funds(virtual_balance)
                     self.logger.debug(f"💰 가상거래 잔고: {virtual_balance:,.0f}원")
                 else:
@@ -637,10 +636,11 @@ class DayTradingBot:
         try:
             self.logger.info("🔥 DEBUG: _system_monitoring_task 시작됨")  # 디버깅용
             self.logger.info("📡 시스템 모니터링 태스크 시작")
-            
+
             last_api_refresh = now_kst()
             last_market_check = now_kst()
             last_intraday_update = now_kst()  # 🆕 장중 데이터 업데이트 시간
+            last_premarket_selection_date = None  # 🆕 장전 후보 종목 선정 날짜
             # last_chart_generation = datetime(2000, 1, 1, tzinfo=KST)  # 🆕 장 마감 후 차트 생성 시간 (주석처리)
             # chart_generation_count = 0  # 🆕 차트 생성 횟수 카운터 (주석처리)
             # last_chart_reset_date = now_kst().date()  # 🆕 차트 카운터 리셋 기준 날짜 (주석처리)
@@ -649,11 +649,20 @@ class DayTradingBot:
             while self.is_running:
                 #self.logger.info(f"🔥 DEBUG: while 루프 실행 중 - is_running: {self.is_running}")  # 디버깅용
                 current_time = now_kst()
-                
+
                 # API 24시간마다 재초기화
                 if (current_time - last_api_refresh).total_seconds() >= 86400:  # 24시간
                     await self._refresh_api()
                     last_api_refresh = current_time
+
+                # 🆕 장전 후보 종목 선정 (08:30~08:50 구간, 하루 1회)
+                current_date = current_time.date()
+                is_premarket_time = (current_time.hour == 8 and 30 <= current_time.minute <= 50)
+                if is_premarket_time and last_premarket_selection_date != current_date:
+                    self.logger.info("🔍 장전 후보 종목 선정 시작 (08:30~08:50)")
+                    await self._select_premarket_candidates()
+                    last_premarket_selection_date = current_date
+                    self.logger.info("✅ 장전 후보 종목 선정 완료")
 
                 # 🆕 장중 종목 실시간 데이터 업데이트 (매분 13~45초 사이에 실행)
                 # 13~45초 구간에서는 이전 실행으로부터 최소 13초 이상 간격만 유지
@@ -933,119 +942,112 @@ class DayTradingBot:
             
         except Exception as e:
             self.logger.error(f"❌ 오늘 후보 종목 복원 실패: {e}")
-   
-    async def _check_condition_search(self):
-        """장중 조건검색 체크"""
+
+    async def _select_premarket_candidates(self):
+        """장전 후보 종목 선정 (08:30~08:50)"""
         try:
-            #self.logger.debug("🔍 장중 조건검색 체크 시작")
-            
-            # 조건검색 seq 리스트 (필요에 따라 여러 조건 추가 가능)
-            #condition_seqs = ["0", "1", "2"]  # 예: 0, 1, 2번 조건
-            condition_seqs = ["0"]
-            
-            all_condition_results = []
-            
-            for seq in condition_seqs:
+            self.logger.info("🔍 Universe 로드 중...")
+
+            # 1. Universe 로드
+            from scripts.update_weekly_universe import load_latest_universe
+            universe = load_latest_universe()
+
+            if not universe:
+                self.logger.error("❌ Universe 로드 실패 - Universe 파일이 없습니다")
+                await self.telegram.notify_error("Premarket Selection", "Universe 파일이 없습니다")
+                return
+
+            self.logger.info(f"✅ Universe 로드 완료: {len(universe)}개 종목")
+
+            # 2. ORB 전략의 select_daily_candidates() 호출
+            from strategies.orb_strategy import ORBStrategy
+            from config.orb_strategy_config import DEFAULT_ORB_CONFIG
+
+            orb_strategy = ORBStrategy(config=DEFAULT_ORB_CONFIG, logger=self.logger)
+
+            self.logger.info("🔍 후보 종목 스크리닝 시작...")
+            candidates = await orb_strategy.select_daily_candidates(
+                universe=universe,
+                api_client=self.api_manager
+            )
+
+            if not candidates:
+                self.logger.info("📊 갭 상승 조건을 만족하는 후보 종목이 없습니다")
+                return
+
+            self.logger.info(f"✅ 후보 종목 {len(candidates)}개 선정 완료")
+
+            # 3. 후보 종목을 거래 관리자에 추가
+            added_count = 0
+            for candidate in candidates:
                 try:
-                    # 조건검색 결과 조회 (단순 조회만)
-                    condition_results = self.candidate_selector.get_condition_search_candidates(seq=seq)
-                    
-                    if condition_results:
-                        all_condition_results.extend(condition_results)
-                        #self.logger.debug(f"✅ 조건검색 {seq}번: {len(condition_results)}개 종목 발견")
-                        #self.logger.debug(f"🔍 조건검색 {seq}번 결과: {condition_results}")
-                    else:
-                        self.logger.debug(f"ℹ️ 조건검색 {seq}번: 해당 종목 없음")
-                        
-                except Exception as e:
-                    self.logger.warning(f"⚠️ 조건검색 {seq}번 오류: {e}")
-                    continue
-            
-            # 결과가 있으면 알림 발송
-            #self.logger.debug(f"🔍 조건검색 전체 결과: {len(all_condition_results)}개 종목")
-            if all_condition_results:
-                
-                # 🆕 장중 선정 종목 관리자에 추가 (과거 분봉 데이터 포함)
-                #self.logger.debug(f"🎯 장중 선정 종목 관리자에 {len(all_condition_results)}개 종목 추가 시작")
-                candidates_to_save = []
-                for stock_data in all_condition_results:
-                    stock_code = stock_data.get('code', '')
-                    stock_name = stock_data.get('name', '')
-                    change_rate = stock_data.get('chgrate', '')
-                    
-                    if stock_code:
-                        # 전날 종가 조회 (일봉 데이터) - 주말 안전 처리
-                        prev_close = 0.0
-                        try:
-                            # 충분한 기간의 데이터 요청 (주말 고려하여 7일)
-                            daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 7)
-                            if daily_data is not None and len(daily_data) >= 2:
-                                if hasattr(daily_data, 'iloc'):  # DataFrame
-                                    # 데이터 정렬 (날짜순)
-                                    daily_data = daily_data.sort_values('stck_bsop_date')
-                                    
-                                    # 오늘 데이터가 있는지 확인
-                                    last_date = daily_data.iloc[-1]['stck_bsop_date']
-                                    if isinstance(last_date, str):
-                                        last_date = datetime.strptime(last_date, '%Y%m%d').date()
-                                    elif hasattr(last_date, 'date'):
-                                        last_date = last_date.date()
-                                    
-                                    # 오늘 데이터가 있으면 전날(iloc[-2]), 없으면 마지막 거래일(iloc[-1]) 사용
-                                    if last_date == now_kst().date() and len(daily_data) >= 2:
-                                        prev_close = float(daily_data.iloc[-2]['stck_clpr'])
-                                        #self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (오늘 데이터 제외)")
-                                    else:
-                                        prev_close = float(daily_data.iloc[-1]['stck_clpr'])
-                                        #self.logger.debug(f"📊 {stock_code}: 전날 종가 {prev_close} (마지막 거래일)")
-                                elif len(daily_data) >= 2:  # List
-                                    prev_close = daily_data[-2].close_price
-                        except Exception as e:
-                            self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
-                        
-                        # 거래 상태 통합 관리자에 추가 (분봉 데이터 수집 + 거래 상태 관리)
-                        selection_reason = f"조건검색 급등주 (등락률: {change_rate}%)"
-                        success = await self.trading_manager.add_selected_stock(
-                            stock_code=stock_code,
-                            stock_name=stock_name,
-                            selection_reason=selection_reason,
-                            prev_close=prev_close
-                        )
-                        
-                        if success:
-                            #self.logger.debug(f"🎯 거래 종목 추가: {stock_code}({stock_name}) - {selection_reason}")
-                            # 🆕 후보 종목 DB 저장용 리스트 구성
-                            try:
-                                score_val = 0.0
-                                if isinstance(change_rate, (int, float)):
-                                    score_val = float(change_rate)
+                    stock_code = candidate.code
+                    stock_name = candidate.name
+                    score = candidate.score
+                    reason = candidate.reason
+
+                    # 전날 종가 조회
+                    prev_close = 0.0
+                    try:
+                        daily_data = self.api_manager.get_ohlcv_data(stock_code, "D", 7)
+                        if daily_data is not None and len(daily_data) >= 2:
+                            if hasattr(daily_data, 'iloc'):
+                                daily_data = daily_data.sort_values('stck_bsop_date')
+                                last_date = daily_data.iloc[-1]['stck_bsop_date']
+                                if isinstance(last_date, str):
+                                    from datetime import datetime
+                                    last_date = datetime.strptime(last_date, '%Y%m%d').date()
+                                elif hasattr(last_date, 'date'):
+                                    last_date = last_date.date()
+
+                                if last_date == now_kst().date() and len(daily_data) >= 2:
+                                    prev_close = float(daily_data.iloc[-2]['stck_clpr'])
                                 else:
-                                    # 문자열인 경우 숫자만 추출 시도 (예: '3.2')
-                                    score_val = float(str(change_rate).replace('%', '').strip()) if str(change_rate).strip() else 0.0
-                            except Exception:
-                                score_val = 0.0
-                            candidates_to_save.append(
-                                CandidateStock(
-                                    code=stock_code,
-                                    name=stock_name,
-                                    market=stock_data.get('market', 'KOSPI'),
-                                    score=score_val,
-                                    reason=selection_reason
-                                )
-                            )
-                # 🆕 후보 종목 DB 저장
+                                    prev_close = float(daily_data.iloc[-1]['stck_clpr'])
+                    except Exception as e:
+                        self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
+
+                    # 거래 상태 관리자에 추가
+                    success = await self.trading_manager.add_selected_stock(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        selection_reason=f"장전선정: {reason} (점수: {score:.2f})",
+                        prev_close=prev_close
+                    )
+
+                    if success:
+                        added_count += 1
+                        self.logger.info(f"  ✓ {stock_code}({stock_name}): {reason} (점수: {score:.2f})")
+
+                except Exception as e:
+                    self.logger.error(f"❌ 후보 종목 추가 실패 {candidate.code}: {e}")
+                    continue
+
+            # 4. DB에 저장
+            if candidates:
                 try:
-                    if candidates_to_save:
-                        self.db_manager.save_candidate_stocks(candidates_to_save)
-                        #self.logger.debug(f"🗄️ 후보 종목 DB 저장 완료: {len(candidates_to_save)}건")
+                    self.db_manager.save_candidate_stocks(candidates)
+                    self.logger.info(f"💾 후보 종목 DB 저장 완료: {len(candidates)}개")
                 except Exception as db_err:
                     self.logger.error(f"❌ 후보 종목 DB 저장 오류: {db_err}")
-            else:
-                self.logger.debug("ℹ️ 장중 조건검색: 발견된 종목 없음")
-            
+
+            self.logger.info(f"✅ 장전 후보 종목 선정 완료: {added_count}/{len(candidates)}개 추가")
+
+            # 5. 텔레그램 알림
+            if added_count > 0:
+                message = f"📊 장전 후보 종목 {added_count}개 선정 완료\n\n"
+                for candidate in candidates[:10]:  # 상위 10개만
+                    message += f"• {candidate.code}({candidate.name}): {candidate.reason}\n"
+                if len(candidates) > 10:
+                    message += f"\n... 외 {len(candidates) - 10}개"
+
+                await self.telegram.send_message(message)
+
         except Exception as e:
-            self.logger.error(f"❌ 장중 조건검색 체크 오류: {e}")
-            await self.telegram.notify_error("Condition Search", e)
+            self.logger.error(f"❌ 장전 후보 종목 선정 실패: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            await self.telegram.notify_error("Premarket Selection", e)
 
     async def _calculate_orb_ranges(self):
         """ORB 레인지 계산 (09:10 이후 실행)"""

@@ -190,12 +190,12 @@ class HistoricalDataCollector:
                 
                 # 3분봉 변환 예상 개수 계산
                 expected_3min_count = data_count // 3
-                self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 5개 필요)")
+                self.logger.info(f"   예상 3분봉: {expected_3min_count}개 (최소 3개 필요)")
 
-                if expected_3min_count >= 5:
+                if expected_3min_count >= 3:
                     self.logger.info(f"   ✅ 신호 생성 조건 충족!")
                 else:
-                    self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/5")
+                    self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/3")
 
                 # 시장 시작시간부터 데이터가 시작되는지 확인
                 if start_time and start_time >= start_time_str:

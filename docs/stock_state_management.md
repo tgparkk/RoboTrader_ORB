@@ -2,7 +2,7 @@
 
 ## 개요
 
-RoboTrader의 종목 상태 관리 시스템은 조건검색으로 선정된 종목부터 매수/매도 완료까지의 전체 라이프사이클을 통합 관리합니다.
+RoboTrader의 종목 상태 관리 시스템은 장전 후보로 선정된 종목부터 매수/매도 완료까지의 전체 라이프사이클을 통합 관리합니다.
 
 ## 종목 상태 (StockState)
 
@@ -10,7 +10,7 @@ RoboTrader의 종목 상태 관리 시스템은 조건검색으로 선정된 종
 
 ```python
 class StockState(Enum):
-    SELECTED = "selected"           # 조건검색으로 선정됨
+    SELECTED = "selected"           # 장전 후보로 선정됨
     BUY_CANDIDATE = "buy_candidate" # 매수 후보
     BUY_PENDING = "buy_pending"     # 매수 주문 중
     POSITIONED = "positioned"       # 매수 완료 (포지션 보유)
@@ -23,7 +23,7 @@ class StockState(Enum):
 ### 상태 변화 흐름
 
 ```
-조건검색 선정
+장전 후보 선정
     ↓
 SELECTED (선정됨)
     ↓ move_to_buy_candidate()
@@ -67,7 +67,7 @@ self.stocks_by_state: Dict[StockState, Dict[str, TradingStock]] = {}
 ```
 
 **주요 메서드**:
-- `add_selected_stock()`: 조건검색 종목 추가
+- `add_selected_stock()`: 장전 후보 종목 추가
 - `move_to_buy_candidate()`: 매수 후보로 변경
 - `execute_buy_order()`: 매수 주문 실행
 - `move_to_sell_candidate()`: 매도 후보로 변경
@@ -78,7 +78,7 @@ self.stocks_by_state: Dict[StockState, Dict[str, TradingStock]] = {}
 **위치**: `core/intraday_stock_manager.py`
 
 **역할**:
-- 조건검색으로 선정된 종목의 과거 분봉 데이터 수집
+- 선정된 후보 종목의 과거 분봉 데이터 수집
 - 실시간 분봉 데이터 업데이트
 - 차트 분석을 위한 데이터 제공
 
@@ -171,10 +171,10 @@ class Order:
 
 ## 실제 사용 시나리오
 
-### 1. 조건검색 → 매수 → 매도 완료 (정상 케이스)
+### 1. 장전 선정 → 매수 → 매도 완료 (정상 케이스)
 
 ```python
-# 1. 조건검색으로 종목 선정
+# 1. 장전 후보 종목 선정
 trading_manager.add_selected_stock("005930", "삼성전자", "급등 패턴")
 # 상태: SELECTED
 
