@@ -952,9 +952,9 @@ class DayTradingBot:
             from scripts.update_weekly_universe import load_latest_universe
             universe = load_latest_universe()
 
-            if not universe:
-                self.logger.error("❌ Universe 로드 실패 - Universe 파일이 없습니다")
-                await self.telegram.notify_error("Premarket Selection", "Universe 파일이 없습니다")
+            if universe is None or universe.empty:
+                self.logger.error("❌ Universe 로드 실패 - Universe 파일이 없거나 비어있습니다")
+                await self.telegram.notify_error("Premarket Selection", "Universe 파일이 없거나 비어있습니다")
                 return
 
             self.logger.info(f"✅ Universe 로드 완료: {len(universe)}개 종목")
