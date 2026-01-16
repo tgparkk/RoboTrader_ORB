@@ -593,9 +593,12 @@ class IntradayStockManager:
                     prev_min = prev_min - 1
                 prev_time = prev_hour * 10000 + prev_min * 100  # HHMMSS 형식
 
-                # 요청 시간과 1분 전 시간의 분봉 추출 (최대 2개)
+                # 요청 시간과 1분 전 시간의 분봉 추출 (최대 2개) -> 🔥 전체 30개 사용으로 변경
                 target_times = [prev_time, target_time]
-                matched_data = chart_df_sorted[chart_df_sorted['time'].isin(target_times)]
+                
+                # 🔥 기존 필터링 로직 무력화: chart_df_sorted 전체를 사용
+                # matched_data = chart_df_sorted[chart_df_sorted['time'].isin(target_times)]
+                matched_data = chart_df_sorted.copy()
 
                 if not matched_data.empty:
                     latest_data = matched_data.copy()
