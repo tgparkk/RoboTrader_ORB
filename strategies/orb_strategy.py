@@ -69,9 +69,18 @@ class ORBStrategy(TradingStrategy):
 
         for stock in universe:
             try:
-                code = stock['code']
-                name = stock['name']
-                market = stock['market']
+                # Handle both dict and string formats for stock
+                if isinstance(stock, dict):
+                    code = stock.get('code')
+                    name = stock.get('name', 'Unknown')
+                    market = stock.get('market', 'Unknown')
+                else:
+                    code = str(stock)
+                    name = 'Unknown'
+                    market = 'Unknown'
+
+                if not code:
+                    continue
 
                 # 1. 현재가 정보 조회
                 price_data = await api_client.get_current_price(code)
@@ -101,8 +110,9 @@ class ORBStrategy(TradingStrategy):
                         )
 
             except Exception as e:
+                stock_code = stock.get('code', 'unknown') if isinstance(stock, dict) else str(stock)
                 if self.logger:
-                    self.logger.warning(f"[ORB 전략] 종목 분석 실패 {stock.get('code', 'unknown')}: {e}")
+                    self.logger.warning(f"[ORB 전략] 종목 분석 실패 {stock_code}: {e}")
                 continue
 
         if self.logger:
