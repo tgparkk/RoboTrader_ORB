@@ -212,15 +212,96 @@ def load_latest_universe() -> pd.DataFrame:
         logger.error("❌ Universe 파일이 없습니다. update_weekly_universe.py를 먼저 실행하세요.")
         return pd.DataFrame()
 
-    # 가장 최신 파일
-    latest_file = max(universe_files, key=lambda f: f.stem.split('_')[1])
+    # 날짜 추출 함수
+    def get_date_from_filename(f: Path) -> str:
+        try:
+            # universe_20260103.json -> 20260103
+            return f.stem.split('_')[1]
+        except IndexError:
+            return "00000000"
 
-    logger.info(f"📂 Universe 로드: {latest_file.name}")
+    # 가장 최신 파일 찾기
+    latest_file = max(universe_files, key=get_date_from_filename)
+
+    logger.info(f"📂 Universe 로드: {latest_file.name} (목록: {[f.name for f in universe_files]})")
     df = pd.read_json(latest_file)
 
     logger.info(f"  총 {len(df)}개 종목 (KOSPI: {len(df[df['market']=='KOSPI'])}개, KOSDAQ: {len(df[df['market']=='KOSDAQ'])}개)")
 
     return df
+
+
+def get_universe_age_days() -> int:
+    """
+    가장 최신 Universe 파일의 생성 후 경과 일수 계산
+
+    Returns:
+        경과 일수 (파일이 없으면 999 반환)
+    """
+    data_dir = project_root / 'data'
+    universe_files = list(data_dir.glob('universe_*.json'))
+
+    if not universe_files:
+        return 999  # 파일이 없으면 매우 큰 값 반환
+
+    # 가장 최신 파일
+    latest_file = max(universe_files, key=lambda f: f.stem.split('_')[1])
+    
+    # 파일명에서 날짜 추출 (universe_20260103.json)
+    date_str = latest_file.stem.split('_')[1]  # '20260103'
+    file_date = datetime.strptime(date_str, '%Y%m%d')
+    
+    # 현재 날짜와 비교
+    today = datetime.now()
+    age_days = (today - file_date).days
+    
+    return age_days
+
+
+def needs_update(max_age_days: int = 7) -> bool:
+    """
+    Universe 업데이트가 필요한지 확인
+
+    Args:
+        max_age_days: 최대 허용 일수 (기본 7일)
+
+    Returns:
+        True: 업데이트 필요, False: 업데이트 불필요
+    """
+    age = get_universe_age_days()
+    return age >= max_age_days
+
+
+def auto_update_if_needed(max_age_days: int = 7, kospi_count: int = 200, kosdaq_count: int = 100) -> bool:
+    """
+    필요 시 자동으로 Universe 업데이트
+
+    Args:
+        max_age_days: 최대 허용 일수
+        kospi_count: KOSPI 종목 수
+        kosdaq_count: KOSDAQ 종목 수
+
+    Returns:
+        True: 업데이트 실행됨, False: 업데이트 불필요
+    """
+    age = get_universe_age_days()
+    
+    if age >= max_age_days:
+        logger.info(f"📅 Universe 업데이트 필요: {age}일 경과 (최대 {max_age_days}일)")
+        logger.info("🔄 자동 업데이트 시작...")
+        
+        try:
+            save_weekly_universe(kospi_count, kosdaq_count)
+            logger.info("✅ Universe 자동 업데이트 완료!")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Universe 자동 업데이트 실패: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    else:
+        logger.info(f"✅ Universe 최신 상태: {age}일 경과 (최대 {max_age_days}일)")
+        return False
 
 
 if __name__ == '__main__':

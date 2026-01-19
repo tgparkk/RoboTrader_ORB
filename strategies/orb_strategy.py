@@ -83,7 +83,7 @@ class ORBStrategy(TradingStrategy):
                     continue
 
                 # 1. 현재가 정보 조회
-                price_data = await api_client.get_current_price(code)
+                price_data = api_client.get_current_price(code)
                 if not price_data:
                     continue
 
@@ -92,7 +92,7 @@ class ORBStrategy(TradingStrategy):
                     continue
 
                 # 2. 일봉 데이터 조회 (최근 30일)
-                daily_data = await api_client.get_daily_ohlcv(code, period=30)
+                daily_data = api_client.get_ohlcv_data(code, "D", 30)
                 if not daily_data or len(daily_data) < 15:
                     continue
 
