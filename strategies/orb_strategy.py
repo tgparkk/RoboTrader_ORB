@@ -164,7 +164,33 @@ class ORBStrategy(TradingStrategy):
         prev_close = float(df.iloc[-1][close_col])  # 가장 최근 일봉 종가
         current_price = getattr(price_data, 'current_price', prev_close)
 
-        # A. 갭 확인 (전일 종가 대비 현재가)
+        # 🆕 장전(08:30~09:00) 예상체결가 활용 로직
+        is_pre_market = False
+        from utils.korean_time import now_kst
+        current_time = now_kst().time()
+        
+        # 장 시작 전이고 현재가가 전일 종가와 같다면 (아직 시가 미형성)
+        if time(8, 30) <= current_time < time(9, 0) and current_price == prev_close:
+            try:
+                # 예상체결가 조회 시도
+                from api.kis_market_api import get_expected_price_info
+                # api_client 객체가 아니라 모듈 함수를 직접 사용 (api_client에 메서드가 없을 수 있음)
+                # 하지만 api_client가 KISAPIManager 인스턴스라면 거기에도 메서드를 추가하는 게 좋겠지만,
+                # 여기서는 직접 임포트해서 사용
+                expected_info = get_expected_price_info(code)
+                
+                if expected_info and expected_info['expected_price'] > 0:
+                    current_price = expected_info['expected_price']
+                    is_pre_market = True
+                    if self.logger:
+                        self.logger.debug(f"[ORB 전략] 🕒 {code}: 장전 예상체결가 사용 ({current_price:,.0f}원)")
+            except ImportError:
+                pass
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"[ORB 전략] 예상체결가 조회 오류 {code}: {e}")
+
+        # A. 갭 확인 (전일 종가 대비 현재가/예상가)
         gap_ratio = (current_price - prev_close) / prev_close if prev_close > 0 else 0
 
         # 갭 방향 확인

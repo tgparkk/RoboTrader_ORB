@@ -28,6 +28,7 @@ from utils.logger import setup_logger
 from utils.korean_time import now_kst, get_market_status, is_market_open, KST
 from config.market_hours import MarketHours
 from scripts.collect_extended_data import ExtendedDataCollector
+from scripts.update_weekly_universe import auto_update_if_needed
 # from post_market_chart_generator import PostMarketChartGenerator  # 파일 없음
 
 
@@ -170,18 +171,26 @@ class DayTradingBot:
         try:
             self.logger.info("🚀 주식 단타 거래 시스템 초기화 시작")
 
-            # 0. 오늘 거래시간 정보 출력 (특수일 확인)
+            # 0. Universe 자동 업데이트 체크 (7일 경과 시 자동 업데이트)
+            self.logger.info("📅 Universe 업데이트 체크 중...")
+            try:
+                auto_update_if_needed(max_age_days=7, kospi_count=200, kosdaq_count=100)
+            except Exception as e:
+                self.logger.warning(f"⚠️ Universe 자동 업데이트 체크 실패: {e}")
+                self.logger.warning("⚠️ 기존 Universe 파일로 계속 진행합니다.")
+
+            # 1. 오늘 거래시간 정보 출력 (특수일 확인)
             today_info = MarketHours.get_today_info('KRX')
             self.logger.info(f"📅 오늘 거래시간 정보:\n{today_info}")
 
-            # 1. API 초기화
+            # 2. API 초기화
             self.logger.info("📡 API 매니저 초기화 시작...")
             if not self.api_manager.initialize():
                 self.logger.error("❌ API 초기화 실패")
                 return False
             self.logger.info("✅ API 매니저 초기화 완료")
 
-            # 1.5. 자금 관리자 초기화 (API 초기화 후)
+            # 2.5. 자금 관리자 초기화 (API 초기화 후)
             # 🆕 가상 매매 모드일 경우 강제로 1000만원 설정
             use_virtual = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
             
@@ -203,19 +212,19 @@ class DayTradingBot:
                     self.logger.warning("⚠️ 잔고 조회 실패 - 기본값 1천만원으로 설정")
                     self.fund_manager.update_total_funds(10000000)
 
-            # 1.6. 가상거래 잔고 초기화 (API 초기화 후) - 위에서 처리했으므로 실거래 모드에서만 로깅
+            # 2.6. 가상거래 잔고 초기화 (API 초기화 후) - 위에서 처리했으므로 실거래 모드에서만 로깅
             if not use_virtual and (self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False):
                  # 설정 파일엔 켜져있으나 위 로직에서 use_virtual이 False인 경우 (거의 없음)
                  pass
 
-            # 2. 시장 상태 확인
+            # 3. 시장 상태 확인
             market_status = get_market_status()
             self.logger.info(f"📊 현재 시장 상태: {market_status}")
             
-            # 3. 텔레그램 초기화
+            # 4. 텔레그램 초기화
             await self.telegram.initialize()
             
-            # 4. DB에서 오늘 날짜의 후보 종목 복원
+            # 5. DB에서 오늘 날짜의 후보 종목 복원
             await self._restore_todays_candidates()
             
             self.logger.info("✅ 시스템 초기화 완료")

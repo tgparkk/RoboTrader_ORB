@@ -709,4 +709,82 @@ def get_stock_market_cap(stock_code: str) -> Optional[Dict[str, Any]]:
         logger.error(f"❌ {stock_code} 시가총액 계산 오류: {e}")
         return None
 
+def get_inquire_asking_price_exp_ccn(div_code: str = "J", itm_no: str = "", tr_cont: str = "",
+                                       FK100: str = "", NK100: str = "") -> Optional[Dict[str, Any]]:
+    """
+    주식현재가 호가/예상체결 (TR: FHKST01010200)
+    장전/장후 동시호가 시간에 예상체결가 정보를 조회합니다.
+    
+    Returns:
+        Dict: API 응답 Body (output1: 호가, output2: 예상체결)
+    """
+    url = '/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn'
+    tr_id = "FHKST01010200"
 
+    params = {
+        "FID_COND_MRKT_DIV_CODE": div_code,     # J:주식/ETF/ETN, W:ELW
+        "FID_INPUT_ISCD": itm_no                # 종목번호(6자리)
+    }
+
+    try:
+        res = kis._url_fetch(url, tr_id, tr_cont, params)
+
+        if res and res.isOK():
+            body = res.getBody()
+            return body
+        else:
+            logger.error("주식현재가 예상체결 조회 실패")
+            return None
+    except Exception as e:
+        logger.error(f"주식현재가 예상체결 조회 오류: {e}")
+        return None
+
+def get_expected_price_info(stock_code: str) -> Optional[Dict[str, Any]]:
+    """
+    장전 예상체결가 정보 조회 (유틸리티 함수)
+    
+    Args:
+        stock_code: 종목코드
+        
+    Returns:
+        Dict: 예상체결가 정보
+            - expected_price: 예상체결가 (antc_cnpr)
+            - expected_volume: 예상체결량 (antc_vol)
+            - expected_change_rate: 예상대비율 (antc_cntg_prdy_ctrt)
+            - expected_change_price: 예상전일대비 (antc_cntg_vrss)
+    """
+    try:
+        body = get_inquire_asking_price_exp_ccn(div_code="J", itm_no=stock_code)
+        
+        if body is None:
+            return None
+            
+        # output2: 예상체결 정보
+        output2 = getattr(body, 'output2', None)
+        
+        if not output2:
+            return None
+            
+        # output2가 리스트인 경우와 딕셔너리인 경우 모두 처리
+        row = output2[0] if isinstance(output2, list) else output2
+        
+        # API field names for FHKST01010200 output2
+        # antc_cnpr: 예상 체결가
+        # antc_vol: 예상 거래량
+        # antc_cntg_prdy_ctrt: 예상 체결 전일 대비율
+        # antc_cntg_vrss: 예상 체결 대비
+        
+        info = {
+            'stock_code': stock_code,
+            'expected_price': float(row.get('antc_cnpr', 0)),
+            'expected_volume': int(row.get('antc_vol', 0)),
+            'expected_change_rate': float(row.get('antc_cntg_prdy_ctrt', 0)),
+            'expected_change_price': float(row.get('antc_cntg_vrss', 0)),
+            'update_time': now_kst()
+        }
+        
+        return info
+        
+    except Exception as e:
+        logger.error(f"❌ {stock_code} 예상체결가 조회 오류: {e}")
+        return None
