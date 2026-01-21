@@ -20,7 +20,7 @@ class ORBStrategy(TradingStrategy):
     """
     ORB (Opening Range Breakout) 전략
 
-    후보 종목 선정 (08:30~08:50):
+    후보 종목 선정 (08:55~08:59):
     - Universe 로드 (주간 업데이트된 KOSPI 200 + KOSDAQ 100)
     - 갭 확인 (전일 종가 대비 0.3~3% 상승)
     - 거래대금 확인 (100억 이상)
@@ -52,7 +52,7 @@ class ORBStrategy(TradingStrategy):
         **kwargs
     ) -> List[CandidateStock]:
         """
-        일간 후보 종목 선정 (08:30~08:50 실행)
+        일간 후보 종목 선정 (08:55~08:59 실행)
 
         Args:
             universe: 종목 유니버스 [{'code': '005930', 'name': '삼성전자', 'market': 'KOSPI', ...}]
@@ -164,13 +164,13 @@ class ORBStrategy(TradingStrategy):
         prev_close = float(df.iloc[-1][close_col])  # 가장 최근 일봉 종가
         current_price = getattr(price_data, 'current_price', prev_close)
 
-        # 🆕 장전(08:30~09:00) 예상체결가 활용 로직
+        # 🆕 장전(08:55~09:00) 예상체결가 활용 로직
         is_pre_market = False
         from utils.korean_time import now_kst
         current_time = now_kst().time()
         
         # 장 시작 전이고 현재가가 전일 종가와 같다면 (아직 시가 미형성)
-        if time(8, 30) <= current_time < time(9, 0) and current_price == prev_close:
+        if time(8, 55) <= current_time < time(9, 0) and current_price == prev_close:
             try:
                 # 예상체결가 조회 시도
                 from api.kis_market_api import get_expected_price_info

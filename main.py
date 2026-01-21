@@ -664,11 +664,11 @@ class DayTradingBot:
                     await self._refresh_api()
                     last_api_refresh = current_time
 
-                # 🆕 장전 후보 종목 선정 (08:30~08:50 구간, 하루 1회)
+                # 🆕 장전 후보 종목 선정 (08:55~08:59 구간, 하루 1회)
                 current_date = current_time.date()
-                is_premarket_time = (current_time.hour == 8 and 30 <= current_time.minute <= 50)
+                is_premarket_time = (current_time.hour == 8 and 55 <= current_time.minute <= 59)
                 if is_premarket_time and last_premarket_selection_date != current_date:
-                    self.logger.info("🔍 장전 후보 종목 선정 시작 (08:30~08:50)")
+                    self.logger.info("🔍 장전 후보 종목 선정 시작 (08:55~08:59)")
                     await self._select_premarket_candidates()
                     last_premarket_selection_date = current_date
                     self.logger.info("✅ 장전 후보 종목 선정 완료")
@@ -953,7 +953,7 @@ class DayTradingBot:
             self.logger.error(f"❌ 오늘 후보 종목 복원 실패: {e}")
 
     async def _select_premarket_candidates(self):
-        """장전 후보 종목 선정 (08:30~08:50)"""
+        """장전 후보 종목 선정 (08:55~08:59)"""
         try:
             self.logger.info("🔍 Universe 로드 중...")
 
