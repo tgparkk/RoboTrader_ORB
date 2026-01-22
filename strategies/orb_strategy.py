@@ -63,13 +63,32 @@ class ORBStrategy(TradingStrategy):
         Returns:
             후보 종목 리스트
         """
+        import time
+        start_time = time.time()
+
         candidates = []
+
+        # 스크리닝 통계 카운터
+        stats = {
+            'total': 0,
+            'invalid_format': 0,
+            'price_fetch_failed': 0,
+            'zero_price': 0,
+            'daily_data_insufficient': 0,
+            'gap_out_of_range': 0,
+            'volume_insufficient': 0,
+            'atr_invalid': 0,
+            'selected': 0,
+            'api_calls': 0,
+        }
 
         # DataFrame인 경우 List[dict]로 변환
         if hasattr(universe, 'to_dict'):
             universe = universe.to_dict('records')
             if self.logger:
-                self.logger.debug(f"[ORB 전략] DataFrame → List[dict] 변환 완료")
+                self.logger.info(f"[ORB 전략] DataFrame → List[dict] 변환 완료")
+
+        stats['total'] = len(universe)
 
         if self.logger:
             self.logger.info(f"[ORB 전략] 후보 종목 선정 시작 - Universe: {len(universe)}개")
@@ -86,35 +105,50 @@ class ORBStrategy(TradingStrategy):
                     name = 'Unknown'
                     market = 'Unknown'
 
-                if not code:
+                if not code or len(code) < 6:
+                    stats['invalid_format'] += 1
                     continue
 
                 # 1. 현재가 정보 조회
+                stats['api_calls'] += 1
                 price_data = api_client.get_current_price(code)
                 if not price_data:
+                    stats['price_fetch_failed'] += 1
                     continue
 
                 current_price = getattr(price_data, 'current_price', 0)
                 if current_price == 0:
+                    stats['zero_price'] += 1
                     continue
 
                 # 2. 일봉 데이터 조회 (최근 30일)
+                stats['api_calls'] += 1
                 daily_data = api_client.get_ohlcv_data(code, "D", 30)
                 if not daily_data or len(daily_data) < 15:
+                    stats['daily_data_insufficient'] += 1
                     continue
 
                 # 3. 후보 종목 평가
-                candidate = await self._evaluate_candidate(
+                candidate, reject_reason = await self._evaluate_candidate_with_reason(
                     code, name, market, price_data, daily_data
                 )
 
                 if candidate:
                     candidates.append(candidate)
+                    stats['selected'] += 1
                     if self.logger:
                         self.logger.info(
                             f"[ORB 전략] ✅ 후보 선정: {name}({code}) - "
                             f"점수: {candidate.score}, 이유: {candidate.reason}"
                         )
+                else:
+                    # 탈락 사유 카운트
+                    if reject_reason == 'gap':
+                        stats['gap_out_of_range'] += 1
+                    elif reject_reason == 'volume':
+                        stats['volume_insufficient'] += 1
+                    elif reject_reason == 'atr':
+                        stats['atr_invalid'] += 1
 
             except Exception as e:
                 stock_code = stock.get('code', 'unknown') if isinstance(stock, dict) else str(stock)
@@ -122,8 +156,23 @@ class ORBStrategy(TradingStrategy):
                     self.logger.warning(f"[ORB 전략] 종목 분석 실패 {stock_code}: {e}")
                 continue
 
+        elapsed_time = time.time() - start_time
+
+        # 스크리닝 요약 통계 로그 (INFO 레벨)
         if self.logger:
             self.logger.info(f"[ORB 전략] 후보 종목 선정 완료: {len(candidates)}개")
+            self.logger.info(
+                f"[ORB 전략] 📊 스크리닝 통계 (소요시간: {elapsed_time:.1f}초, API호출: {stats['api_calls']}회):\n"
+                f"  - 전체: {stats['total']}개\n"
+                f"  - 잘못된 형식: {stats['invalid_format']}개\n"
+                f"  - 가격조회 실패: {stats['price_fetch_failed']}개\n"
+                f"  - 가격 0원: {stats['zero_price']}개\n"
+                f"  - 일봉 부족(<15일): {stats['daily_data_insufficient']}개\n"
+                f"  - 갭 범위 벗어남: {stats['gap_out_of_range']}개\n"
+                f"  - 거래대금 부족: {stats['volume_insufficient']}개\n"
+                f"  - ATR 비정상: {stats['atr_invalid']}개\n"
+                f"  - ✅ 선정: {stats['selected']}개"
+            )
 
         return candidates
 
@@ -136,12 +185,35 @@ class ORBStrategy(TradingStrategy):
         daily_data: Any
     ) -> Optional[CandidateStock]:
         """
-        후보 종목 평가
+        후보 종목 평가 (기존 호환성 유지용 wrapper)
+
+        Returns:
+            CandidateStock 또는 None
+        """
+        candidate, _ = await self._evaluate_candidate_with_reason(
+            code, name, market, price_data, daily_data
+        )
+        return candidate
+
+    async def _evaluate_candidate_with_reason(
+        self,
+        code: str,
+        name: str,
+        market: str,
+        price_data: Any,
+        daily_data: Any
+    ) -> tuple:
+        """
+        후보 종목 평가 (탈락 사유 포함)
 
         검증 항목:
         - 갭 (0.3~3% 상승)
         - 거래대금 (100억 이상)
         - ATR 유효성
+
+        Returns:
+            (CandidateStock, None) 또는 (None, reject_reason)
+            reject_reason: 'gap', 'volume', 'atr', None
         """
         score = 0
         reasons = []
@@ -175,7 +247,7 @@ class ORBStrategy(TradingStrategy):
         is_pre_market = False
         from utils.korean_time import now_kst
         current_time = now_kst().time()
-        
+
         # 장 시작 전이고 현재가가 전일 종가와 같다면 (아직 시가 미형성)
         if time(8, 55) <= current_time < time(9, 0) and current_price == prev_close:
             try:
@@ -185,7 +257,7 @@ class ORBStrategy(TradingStrategy):
                 # 하지만 api_client가 KISAPIManager 인스턴스라면 거기에도 메서드를 추가하는 게 좋겠지만,
                 # 여기서는 직접 임포트해서 사용
                 expected_info = get_expected_price_info(code)
-                
+
                 if expected_info and expected_info['expected_price'] > 0:
                     current_price = expected_info['expected_price']
                     is_pre_market = True
@@ -202,9 +274,9 @@ class ORBStrategy(TradingStrategy):
 
         # 갭 방향 확인
         if self.config.gap_direction == "up" and gap_ratio < 0:
-            return None  # 하락 갭은 제외
+            return (None, 'gap')  # 하락 갭은 제외
         elif self.config.gap_direction == "down" and gap_ratio > 0:
-            return None  # 상승 갭은 제외
+            return (None, 'gap')  # 상승 갭은 제외
 
         # 갭 크기 확인
         abs_gap = abs(gap_ratio)
@@ -213,7 +285,7 @@ class ORBStrategy(TradingStrategy):
                 self.logger.debug(
                     f"[ORB 전략] ❌ {code}: 갭 범위 벗어남 ({gap_ratio:.2%})"
                 )
-            return None
+            return (None, 'gap')
 
         score += self.config.score_weights['valid_gap']
         reasons.append(f"적절한 갭 ({gap_ratio:+.2%})")
@@ -229,7 +301,7 @@ class ORBStrategy(TradingStrategy):
                 self.logger.debug(
                     f"[ORB 전략] ❌ {code}: 거래대금 부족 ({volume_amount/1e9:.1f}억)"
                 )
-            return None
+            return (None, 'volume')
 
         # 5일 평균 거래대금
         recent_5d = df.tail(5)
@@ -243,7 +315,7 @@ class ORBStrategy(TradingStrategy):
                 self.logger.debug(
                     f"[ORB 전략] ❌ {code}: 5일 평균 거래대금 부족 ({avg_amount_5d/1e9:.1f}억)"
                 )
-            return None
+            return (None, 'volume')
 
         score += self.config.score_weights['sufficient_trading_amount']
         reasons.append(f"충분한 거래대금 ({volume_amount/1e9:.1f}억)")
@@ -255,13 +327,13 @@ class ORBStrategy(TradingStrategy):
                 self.logger.debug(
                     f"[ORB 전략] ❌ {code}: ATR 비정상 ({atr:,.0f}원)"
                 )
-            return None
+            return (None, 'atr')
 
         score += self.config.score_weights['valid_atr']
         reasons.append(f"ATR {atr:,.0f}원")
 
         # 후보 종목 생성
-        return CandidateStock(
+        return (CandidateStock(
             code=code,
             name=name,
             market=market,
@@ -273,7 +345,7 @@ class ORBStrategy(TradingStrategy):
                 'atr': atr,
                 'avg_volume_5d': recent_5d[vol_col].astype(float).mean()
             }
-        )
+        ), None)
 
     def _calculate_atr(
         self,
