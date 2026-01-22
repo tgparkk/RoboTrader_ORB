@@ -47,7 +47,7 @@ class ORBStrategy(TradingStrategy):
 
     async def select_daily_candidates(
         self,
-        universe: List[dict],
+        universe,
         api_client: Any,
         **kwargs
     ) -> List[CandidateStock]:
@@ -55,7 +55,8 @@ class ORBStrategy(TradingStrategy):
         일간 후보 종목 선정 (08:55~08:59 실행)
 
         Args:
-            universe: 종목 유니버스 [{'code': '005930', 'name': '삼성전자', 'market': 'KOSPI', ...}]
+            universe: 종목 유니버스 - DataFrame 또는 List[dict]
+                      [{'code': '005930', 'name': '삼성전자', 'market': 'KOSPI', ...}]
             api_client: API 클라이언트
             **kwargs: 추가 파라미터
 
@@ -63,6 +64,12 @@ class ORBStrategy(TradingStrategy):
             후보 종목 리스트
         """
         candidates = []
+
+        # DataFrame인 경우 List[dict]로 변환
+        if hasattr(universe, 'to_dict'):
+            universe = universe.to_dict('records')
+            if self.logger:
+                self.logger.debug(f"[ORB 전략] DataFrame → List[dict] 변환 완료")
 
         if self.logger:
             self.logger.info(f"[ORB 전략] 후보 종목 선정 시작 - Universe: {len(universe)}개")
