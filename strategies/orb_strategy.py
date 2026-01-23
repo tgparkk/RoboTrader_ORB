@@ -124,7 +124,7 @@ class ORBStrategy(TradingStrategy):
                 # 2. 일봉 데이터 조회 (최근 30일)
                 stats['api_calls'] += 1
                 daily_data = api_client.get_ohlcv_data(code, "D", 30)
-                if not daily_data or len(daily_data) < 15:
+                if daily_data is None or (hasattr(daily_data, 'empty') and daily_data.empty) or len(daily_data) < 15:
                     stats['daily_data_insufficient'] += 1
                     continue
 
