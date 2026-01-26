@@ -24,6 +24,10 @@ class ORBStrategyConfig:
     max_gap_ratio: float = 0.03   # 최대 갭 3%
     gap_direction: str = "up"     # 갭 방향: "up" (상승), "down" (하락), "both" (양방향)
 
+    # 주말 후 시장 대응 (월요일 완화 설정)
+    enable_monday_relaxation: bool = True  # 월요일 갭 조건 완화 활성화
+    monday_min_gap_ratio: float = 0.002    # 월요일 최소 갭 0.2% (평일 0.3%보다 완화)
+
     # ===== 오프닝 레인지 설정 =====
 
     # 시간 설정

@@ -37,6 +37,7 @@ class StockPrice:
     change_amount: float
     change_rate: float
     volume: int
+    volume_amount: float  # 거래대금 (누적 거래 대금)
     timestamp: datetime
 
 
@@ -294,13 +295,23 @@ class KISAPIManager:
                 return None
             
             data = result.iloc[0]
-            
+
+            # 거래대금 파싱 (acml_tr_pbmn: 누적 거래 대금)
+            volume_amount = float(data.get('acml_tr_pbmn', 0))
+
+            # 거래대금이 없으면 거래량 * 현재가로 계산
+            if volume_amount == 0:
+                volume = int(data.get('acml_vol', 0))
+                current_price = float(data.get('stck_prpr', 0))
+                volume_amount = volume * current_price
+
             stock_price = StockPrice(
                 stock_code=stock_code,
                 current_price=float(data.get('stck_prpr', 0)),
                 change_amount=float(data.get('prdy_vrss', 0)),
                 change_rate=float(data.get('prdy_ctrt', 0)),
                 volume=int(data.get('acml_vol', 0)),
+                volume_amount=volume_amount,
                 timestamp=now_kst()
             )
             

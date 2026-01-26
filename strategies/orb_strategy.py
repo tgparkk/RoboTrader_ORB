@@ -80,6 +80,15 @@ class ORBStrategy(TradingStrategy):
             'atr_invalid': 0,
             'selected': 0,
             'api_calls': 0,
+            # 갭 상승 분포 통계
+            'gap_dist': {
+                'negative': 0,      # 갭 하락
+                'flat': 0,          # 0~0.3%
+                'small': 0,         # 0.3~1%
+                'medium': 0,        # 1~2%
+                'large': 0,         # 2~3%
+                'too_large': 0,     # 3% 이상
+            },
         }
 
         # DataFrame인 경우 List[dict]로 변환
@@ -133,6 +142,48 @@ class ORBStrategy(TradingStrategy):
                     code, name, market, price_data, daily_data
                 )
 
+                # 갭 분포 통계 수집 (평가 후 metadata에서 갭 비율 추출)
+                if candidate and 'gap_ratio' in candidate.metadata:
+                    gap_ratio = candidate.metadata['gap_ratio']
+                    if gap_ratio < 0:
+                        stats['gap_dist']['negative'] += 1
+                    elif gap_ratio < 0.003:
+                        stats['gap_dist']['flat'] += 1
+                    elif gap_ratio < 0.01:
+                        stats['gap_dist']['small'] += 1
+                    elif gap_ratio < 0.02:
+                        stats['gap_dist']['medium'] += 1
+                    elif gap_ratio < 0.03:
+                        stats['gap_dist']['large'] += 1
+                    else:
+                        stats['gap_dist']['too_large'] += 1
+                elif reject_reason == 'gap':
+                    # 거절된 경우에도 갭 비율을 알아야 하는데, 현재는 반환되지 않음
+                    # 대신 일봉 데이터로 직접 계산
+                    if hasattr(daily_data, 'iloc'):
+                        df_temp = daily_data
+                    else:
+                        df_temp = pd.DataFrame([
+                            {'stck_clpr': d.close_price} for d in daily_data
+                        ])
+                    close_col_temp = 'close' if 'close' in df_temp.columns else 'stck_clpr'
+                    prev_close_temp = float(df_temp.iloc[-1][close_col_temp])
+                    current_price_temp = getattr(price_data, 'current_price', prev_close_temp)
+                    gap_ratio_temp = (current_price_temp - prev_close_temp) / prev_close_temp if prev_close_temp > 0 else 0
+
+                    if gap_ratio_temp < 0:
+                        stats['gap_dist']['negative'] += 1
+                    elif gap_ratio_temp < 0.003:
+                        stats['gap_dist']['flat'] += 1
+                    elif gap_ratio_temp < 0.01:
+                        stats['gap_dist']['small'] += 1
+                    elif gap_ratio_temp < 0.02:
+                        stats['gap_dist']['medium'] += 1
+                    elif gap_ratio_temp < 0.03:
+                        stats['gap_dist']['large'] += 1
+                    else:
+                        stats['gap_dist']['too_large'] += 1
+
                 if candidate:
                     candidates.append(candidate)
                     stats['selected'] += 1
@@ -161,6 +212,19 @@ class ORBStrategy(TradingStrategy):
         # 스크리닝 요약 통계 로그 (INFO 레벨)
         if self.logger:
             self.logger.info(f"[ORB 전략] 후보 종목 선정 완료: {len(candidates)}개")
+
+            # 갭 분포 통계
+            gap_dist = stats['gap_dist']
+            gap_dist_summary = (
+                f"\n📈 갭 상승 분포:\n"
+                f"  - 갭 하락: {gap_dist['negative']}개\n"
+                f"  - 보합권(0~0.3%): {gap_dist['flat']}개\n"
+                f"  - 소폭상승(0.3~1%): {gap_dist['small']}개\n"
+                f"  - 중간상승(1~2%): {gap_dist['medium']}개\n"
+                f"  - 큰상승(2~3%): {gap_dist['large']}개\n"
+                f"  - 과도상승(3%+): {gap_dist['too_large']}개"
+            )
+
             self.logger.info(
                 f"[ORB 전략] 📊 스크리닝 통계 (소요시간: {elapsed_time:.1f}초, API호출: {stats['api_calls']}회):\n"
                 f"  - 전체: {stats['total']}개\n"
@@ -171,7 +235,8 @@ class ORBStrategy(TradingStrategy):
                 f"  - 갭 범위 벗어남: {stats['gap_out_of_range']}개\n"
                 f"  - 거래대금 부족: {stats['volume_insufficient']}개\n"
                 f"  - ATR 비정상: {stats['atr_invalid']}개\n"
-                f"  - ✅ 선정: {stats['selected']}개"
+                f"  - ✅ 선정: {stats['selected']}개\n"
+                f"{gap_dist_summary}"
             )
 
         return candidates
@@ -278,9 +343,22 @@ class ORBStrategy(TradingStrategy):
         elif self.config.gap_direction == "down" and gap_ratio > 0:
             return (None, 'gap')  # 상승 갭은 제외
 
+        # 🆕 월요일 갭 조건 완화 (주말 후 시장 특성 반영)
+        min_gap_threshold = self.config.min_gap_ratio
+        if self.config.enable_monday_relaxation:
+            from utils.korean_time import now_kst
+            current_weekday = now_kst().weekday()  # 0=월요일, 6=일요일
+            if current_weekday == 0:  # 월요일
+                min_gap_threshold = self.config.monday_min_gap_ratio
+                if self.logger and abs_gap >= self.config.monday_min_gap_ratio:
+                    self.logger.debug(
+                        f"[ORB 전략] 📅 월요일 갭 조건 완화 적용: {code} "
+                        f"(갭 {gap_ratio:.2%}, 기준 {min_gap_threshold:.2%})"
+                    )
+
         # 갭 크기 확인
         abs_gap = abs(gap_ratio)
-        if abs_gap < self.config.min_gap_ratio or abs_gap > self.config.max_gap_ratio:
+        if abs_gap < min_gap_threshold or abs_gap > self.config.max_gap_ratio:
             if self.logger:
                 self.logger.debug(
                     f"[ORB 전략] ❌ {code}: 갭 범위 벗어남 ({gap_ratio:.2%})"
@@ -292,9 +370,30 @@ class ORBStrategy(TradingStrategy):
 
         # B. 거래대금 확인
         volume_amount = getattr(price_data, 'volume_amount', 0)
-        if volume_amount == 0:
+
+        # 🆕 거래대금 데이터 검증: API 파싱 실패 시 폴백 로직
+        if volume_amount == 0 or volume_amount < 1e6:  # 100만원 미만이면 비정상
+            # 1차 폴백: volume * current_price로 계산
             volume = getattr(price_data, 'volume', 0)
-            volume_amount = volume * current_price
+            if volume > 0 and current_price > 0:
+                volume_amount = volume * current_price
+                if self.logger:
+                    self.logger.debug(
+                        f"[ORB 전략] ⚠️ {code}: 거래대금 필드 없음, volume×price로 계산 ({volume_amount/1e9:.1f}억)"
+                    )
+
+            # 2차 폴백: 5일 평균 거래대금 사용 (장전 시점에 유용)
+            if volume_amount < 1e6:
+                recent_5d = df.tail(5)
+                volume_amount = (
+                    recent_5d[vol_col].astype(float) *
+                    recent_5d[close_col].astype(float)
+                ).mean()
+
+                if self.logger:
+                    self.logger.debug(
+                        f"[ORB 전략] ⚠️ {code}: 당일 거래대금 산출 불가, 5일 평균 사용 ({volume_amount/1e9:.1f}억)"
+                    )
 
         if volume_amount < self.config.min_trading_amount:
             if self.logger:
