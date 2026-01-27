@@ -294,6 +294,54 @@ df['floor_3min'] = df.index.floor('3min')
 **상태**: 정상 작동 (자동 필터링)
 **영향**: 없음
 
+### 가상매매 매도 미실행 (2026-01-27 수정)
+```
+⚠️ 포지션 정보 없음 (매도 판단 건너뜀)
+```
+**원인**: 가상매매 모드에서 매수 후 Position 객체가 생성되지 않음
+**증상**:
+- 매수는 성공하지만 상태는 `positioned`로 변경됨
+- 하지만 `trading_stock.position`이 `None`
+- 매도 판단 루프에서 "포지션 정보 없음"으로 건너뜀
+- 15:00 일괄 청산도 실행 안 됨
+
+**수정 위치**:
+1. `core/trading_decision_engine.py:234-260` - Position 객체 생성 로직 추가
+2. `main.py:520-530` - 포지션 없을 때 경고 로그 추가
+
+**수정 내용**:
+```python
+# Before
+if trading_stock.position:
+    trading_stock.position.avg_price = current_price
+    trading_stock.position.quantity = quantity
+
+# After
+if not trading_stock.position:
+    from core.models import Position
+    trading_stock.position = Position(
+        stock_code=trading_stock.stock_code,
+        quantity=quantity,
+        avg_price=current_price,
+        current_price=current_price
+    )
+else:
+    trading_stock.position.avg_price = current_price
+    trading_stock.position.quantity = quantity
+```
+
+**확인 방법**:
+```bash
+# 매수 후 포지션 확인
+grep "포지션:" logs/trading_YYYYMMDD.log
+
+# 매도 판단 확인
+grep "매도 판단 대상" logs/trading_YYYYMMDD.log
+
+# 15:00 청산 확인
+grep "일괄매도" logs/trading_YYYYMMDD.log
+```
+
 ---
 
 ## 추가 문서

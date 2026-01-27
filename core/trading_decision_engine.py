@@ -233,22 +233,33 @@ class TradingDecisionEngine:
 
             if buy_id:
                 # 포지션 정보 업데이트 (손절/익절가 계산)
-                if trading_stock.position:
+                if not trading_stock.position:
+                    # 가상매매에서는 포지션 객체가 없으므로 새로 생성
+                    from core.models import Position
+                    trading_stock.position = Position(
+                        stock_code=trading_stock.stock_code,
+                        quantity=quantity,
+                        avg_price=current_price,
+                        current_price=current_price
+                    )
+                else:
+                    # 포지션이 이미 있으면 업데이트
                     trading_stock.position.avg_price = current_price
                     trading_stock.position.quantity = quantity
+                    trading_stock.position.current_price = current_price
 
-                    # 손절가/익절가 계산 (전략에서 가져온 값 또는 기본 비율 사용)
-                    if hasattr(trading_stock, 'stop_loss_price') and trading_stock.stop_loss_price:
-                        pass  # 이미 설정됨
-                    else:
-                        # 기본 손절가 (2.5% 손실)
-                        trading_stock.stop_loss_price = current_price * 0.975
+                # 손절가/익절가 계산 (전략에서 가져온 값 또는 기본 비율 사용)
+                if hasattr(trading_stock, 'stop_loss_price') and trading_stock.stop_loss_price:
+                    pass  # 이미 설정됨
+                else:
+                    # 기본 손절가 (2.5% 손실)
+                    trading_stock.stop_loss_price = current_price * 0.975
 
-                    if hasattr(trading_stock, 'profit_target_price') and trading_stock.profit_target_price:
-                        pass  # 이미 설정됨
-                    else:
-                        # 기본 익절가 (3.5% 수익)
-                        trading_stock.profit_target_price = current_price * 1.035
+                if hasattr(trading_stock, 'profit_target_price') and trading_stock.profit_target_price:
+                    pass  # 이미 설정됨
+                else:
+                    # 기본 익절가 (3.5% 수익)
+                    trading_stock.profit_target_price = current_price * 1.035
 
                 self.logger.info(f"✅ 가상 매수 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
                                f"{quantity}주 @{current_price:,.0f}원 - {reason}")

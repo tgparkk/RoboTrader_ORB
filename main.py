@@ -524,6 +524,9 @@ class DayTradingBot:
                             # 가상 포지션 정보 설정 (손절/익절가 계산용)
                             if trading_stock.position:
                                 trading_stock.position.virtual_buy_id = buy_record_id
+                            else:
+                                # Position 객체가 없으면 여기서 확인 (execute_virtual_buy에서 생성했어야 함)
+                                self.logger.warning(f"⚠️ {stock_code} 가상 매수 후 포지션 객체 없음 (버그 가능성)")
 
                             # 🆕 가상 잔고를 fund_manager에 동기화 (가상/실거래 통합 관리)
                             virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
