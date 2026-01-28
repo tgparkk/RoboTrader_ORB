@@ -159,6 +159,7 @@ class TradingDecisionEngine:
             (매도여부, 사유)
         """
         if data is None or len(data) < 1:
+            self.logger.debug(f"매도 판단 스킵: {trading_stock.stock_code} 데이터 부족 (data=None 또는 empty)")
             return False, "데이터 부족"
 
         current_price = float(data['close'].iloc[-1])
@@ -186,6 +187,12 @@ class TradingDecisionEngine:
             except Exception as e:
                 self.logger.error(f"전략 매도 판단 실패 ({trading_stock.stock_code}): {e}")
 
+        sl = getattr(trading_stock, 'stop_loss_price', None) or 0
+        tp = getattr(trading_stock, 'profit_target_price', None) or 0
+        self.logger.debug(
+            f"매도 판단 유지: {trading_stock.stock_code} 현재가 {current_price:,.0f} "
+            f"손절 {sl:,.0f} 익절 {tp:,.0f}"
+        )
         return False, ""
 
     async def execute_virtual_buy(self, trading_stock, data, reason: str, buy_price: float = None, quantity: int = None):
@@ -287,13 +294,15 @@ class TradingDecisionEngine:
             bool: 성공 여부
         """
         try:
-            # 현재가 조회
+            current_price = 0.0
             current_price_info = self.intraday_manager.get_cached_current_price(trading_stock.stock_code)
-            if not current_price_info:
+            if current_price_info:
+                current_price = float(current_price_info.get('current_price') or 0)
+            if current_price <= 0 and trading_stock.position:
+                current_price = float(trading_stock.position.current_price or trading_stock.position.avg_price or 0)
+            if current_price <= 0:
                 self.logger.error(f"❌ 가상 매도 실패: 현재가 조회 실패 ({trading_stock.stock_code})")
                 return False
-
-            current_price = float(current_price_info.current_price)
 
             # DB에서 가상 매수 기록 조회
             if not self.db_manager:

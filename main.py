@@ -573,14 +573,20 @@ class DayTradingBot:
         try:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
-            
-            # 실시간 현재가 정보만 확인 (간단한 손절/익절 로직)
+
             current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
             if current_price_info is None:
+                self.logger.debug(f"📊 매도 판단 스킵: {stock_code}({stock_name}) 현재가 없음 (캐시 미갱신 또는 미수집)")
                 return
-            
-            # 매매 판단 엔진으로 매도 신호 확인 (combined_data 불필요)
-            sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, None)
+
+            current_price = current_price_info.get('current_price') or 0.0
+            if current_price <= 0:
+                self.logger.debug(f"📊 매도 판단 스킵: {stock_code}({stock_name}) 현재가 유효하지 않음 ({current_price})")
+                return
+
+            data = pd.DataFrame({'close': [float(current_price)]})
+
+            sell_signal, sell_reason = await self.decision_engine.analyze_sell_decision(trading_stock, data)
             
             if sell_signal:
                 # 🆕 매도 전 종목 상태 확인
@@ -787,11 +793,10 @@ class DayTradingBot:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
     
     async def _execute_end_of_day_liquidation(self):
-        """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용)"""
+        """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용). 가상거래 시 가상 매도만 수행."""
         try:
             from core.models import StockState
 
-            # 동적 청산 시간 가져오기
             current_time = now_kst()
             market_hours = MarketHours.get_market_hours('KRX', current_time)
             eod_hour = market_hours['eod_liquidation_hour']
@@ -803,9 +808,38 @@ class DayTradingBot:
                 self.logger.info(f"📦 {eod_hour}:{eod_minute:02d} 시장가 매도: 보유 포지션 없음")
                 return
 
+            use_virtual = (
+                self.config.risk_management.use_virtual_trading
+                if hasattr(self.config.risk_management, 'use_virtual_trading')
+                else False
+            )
+
+            if use_virtual:
+                self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 가상 일괄청산 시작: {len(positioned_stocks)}종목")
+                for trading_stock in positioned_stocks:
+                    try:
+                        if not trading_stock.position or trading_stock.position.quantity <= 0:
+                            continue
+                        stock_code = trading_stock.stock_code
+                        stock_name = trading_stock.stock_name
+                        reason = f"{eod_hour}:{eod_minute:02d} 시장가 일괄청산"
+                        moved = self.trading_manager.move_to_sell_candidate(stock_code, reason)
+                        if moved:
+                            ok = await self.decision_engine.execute_virtual_sell(trading_stock, None, reason)
+                            if ok:
+                                virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
+                                self.fund_manager.update_total_funds(virtual_balance)
+                                self.logger.info(f"📉 가상 일괄청산: {stock_code}({stock_name}) - {reason}")
+                                self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 일괄청산 체결")
+                            else:
+                                self.logger.warning(f"⚠️ 가상 일괄청산 실패: {stock_code}({stock_name})")
+                    except Exception as se:
+                        self.logger.error(f"❌ {eod_hour}:{eod_minute:02d} 가상 청산 개별 오류({trading_stock.stock_code}): {se}")
+                self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 가상 일괄청산 완료")
+                return
+
             self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(positioned_stocks)}종목")
 
-            # 모든 보유 종목 시장가 매도
             for trading_stock in positioned_stocks:
                 try:
                     if not trading_stock.position or trading_stock.position.quantity <= 0:
@@ -814,11 +848,8 @@ class DayTradingBot:
                     stock_code = trading_stock.stock_code
                     stock_name = trading_stock.stock_name
                     quantity = int(trading_stock.position.quantity)
+                    current_price = 0.0
 
-                    # 시장가 매도를 위해 현재가 조회 (시장가는 가격 0으로 주문)
-                    current_price = 0.0  # 시장가는 0원으로 주문
-
-                    # 상태를 매도 대기로 변경 후 시장가 매도 주문
                     moved = self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
                     if moved:
                         await self.trading_manager.execute_sell_order(
@@ -828,8 +859,6 @@ class DayTradingBot:
 
                 except Exception as se:
                     self.logger.error(f"❌ {eod_hour}:{eod_minute:02d} 시장가 매도 개별 처리 오류({trading_stock.stock_code}): {se}")
-
-            # 가상 포지션 처리 제거 (실제 매매 모드)
 
             self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 시장가 일괄매도 요청 완료")
 
