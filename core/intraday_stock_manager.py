@@ -157,14 +157,27 @@ class IntradayStockManager:
                 #self.logger.debug(f"✅ {stock_code}({stock_name}) 장중 선정 완료 - "
                 #               f"시간: {current_time.strftime('%H:%M:%S')}")
             
-            # 🔥 과거 데이터 수집 (09:05 이전에도 시도)
+            # 🔥 과거 데이터 수집 (장전 선정 시에는 건너뛰기)
             current_time = now_kst()
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            market_open = market_hours['market_open']
+
+            # 장 시작 전인지 확인 (08:55~08:59에 선정된 경우)
+            is_premarket = current_time < market_open
+
+            if is_premarket:
+                # 장 시작 전에는 데이터 수집을 건너뛰고 나중에 수집
+                self.logger.info(f"⏰ {stock_code} 장전 선정 - 데이터 수집은 09:00 이후 진행 (선정시간: {current_time.strftime('%H:%M:%S')})")
+                with self._lock:
+                    if stock_code in self.selected_stocks:
+                        self.selected_stocks[stock_code].data_complete = False
+                return True  # 종목은 추가하되 데이터는 나중에 수집
+
+            # 장 시작 후 데이터 수집
             self.logger.info(f"📈 {stock_code} 과거 데이터 수집 시작... (선정시간: {current_time.strftime('%H:%M:%S')})")
             success = await self.historical_collector.collect_historical_data(stock_code)
 
             # 🆕 시장 시작 5분 이내 선정이고 데이터 부족한 경우 플래그 설정 (동적 시간 적용)
-            market_hours = MarketHours.get_market_hours('KRX', current_time)
-            market_open = market_hours['market_open']
             open_hour = market_open.hour
             open_minute = market_open.minute
 
@@ -177,7 +190,7 @@ class IntradayStockManager:
                     if stock_code in self.selected_stocks:
                         self.selected_stocks[stock_code].data_complete = False
                 success = True  # 종목은 추가하되 데이터는 나중에 재수집
-            
+
             if success:
                 #self.logger.info(f"✅ {stock_code} 과거 데이터 수집 완료 및 종목 추가 성공")
                 return True

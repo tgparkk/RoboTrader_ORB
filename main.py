@@ -460,14 +460,18 @@ class DayTradingBot:
                 if first_time.hour == 9 and first_time.minute not in [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]:
                     self.logger.warning(f"⚠️ {stock_code} 첫 3분봉이 정규 시간이 아님: {first_time.strftime('%H:%M')} (09:00, 09:03, 09:06... 중 하나여야 함) - 경고만, 진행")
 
+            # 🆕 이미 매수 진행 중이거나 포지션 보유 중이면 매수 판단 건너뛰기
+            if trading_stock.state in (StockState.BUY_PENDING, StockState.POSITIONED, StockState.SELL_CANDIDATE, StockState.SELL_PENDING):
+                return  # 매수 불가 상태 - 중복 매수 방지
+
             # 매매 판단 엔진으로 매수 신호 확인 (완성된 3분봉 데이터 사용)
             buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
-            
+
             self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
             if buy_signal and buy_info:
                 self.logger.debug(f"💰 {stock_code} 매수 정보: 가격={buy_info['buy_price']:,.0f}원, 수량={buy_info['quantity']:,}주, 투자금={buy_info['max_buy_amount']:,.0f}원")
-          
-            
+
+
             if buy_signal and buy_info.get('quantity', 0) > 0:
                 self.logger.info(f"🚀 {stock_code}({stock_name}) 매수 신호 발생: {buy_reason}")
 
@@ -1082,7 +1086,7 @@ class DayTradingBot:
                 if len(candidates) > 10:
                     message += f"\n... 외 {len(candidates) - 10}개"
 
-                await self.telegram.send_message(message)
+                await self.telegram.notify_system_status(message)
 
         except Exception as e:
             self.logger.error(f"❌ 장전 후보 종목 선정 실패: {e}")
