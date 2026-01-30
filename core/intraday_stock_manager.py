@@ -159,11 +159,9 @@ class IntradayStockManager:
             
             # 🔥 과거 데이터 수집 (장전 선정 시에는 건너뛰기)
             current_time = now_kst()
-            market_hours = MarketHours.get_market_hours('KRX', current_time)
-            market_open = market_hours['market_open']
 
             # 장 시작 전인지 확인 (08:55~08:59에 선정된 경우)
-            is_premarket = current_time < market_open
+            is_premarket = MarketHours.is_before_market_open('KRX', current_time)
 
             if is_premarket:
                 # 장 시작 전에는 데이터 수집을 건너뛰고 나중에 수집
@@ -178,8 +176,9 @@ class IntradayStockManager:
             success = await self.historical_collector.collect_historical_data(stock_code)
 
             # 🆕 시장 시작 5분 이내 선정이고 데이터 부족한 경우 플래그 설정 (동적 시간 적용)
-            open_hour = market_open.hour
-            open_minute = market_open.minute
+            market_hours = MarketHours.get_market_hours('KRX', current_time)
+            open_hour = market_hours['market_open'].hour
+            open_minute = market_hours['market_open'].minute
 
             is_early_selection = (current_time.hour == open_hour and current_time.minute < open_minute + 5)
 
