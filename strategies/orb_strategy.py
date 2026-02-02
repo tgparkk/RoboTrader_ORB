@@ -345,6 +345,7 @@ class ORBStrategy(TradingStrategy):
 
         # 🆕 월요일 갭 조건 완화 (주말 후 시장 특성 반영)
         min_gap_threshold = self.config.min_gap_ratio
+        abs_gap = abs(gap_ratio)  # 월요일 조건 확인 전에 미리 계산
         if self.config.enable_monday_relaxation:
             from utils.korean_time import now_kst
             current_weekday = now_kst().weekday()  # 0=월요일, 6=일요일
@@ -357,7 +358,6 @@ class ORBStrategy(TradingStrategy):
                     )
 
         # 갭 크기 확인
-        abs_gap = abs(gap_ratio)
         if abs_gap < min_gap_threshold or abs_gap > self.config.max_gap_ratio:
             if self.logger:
                 self.logger.debug(

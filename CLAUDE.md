@@ -661,6 +661,42 @@ grep "매도 판단 대상" logs/trading_YYYYMMDD.log
 grep "일괄매도" logs/trading_YYYYMMDD.log
 ```
 
+### 월요일 후보 선정 실패 (2026-02-02 수정)
+```
+[ORB 전략] 종목 분석 실패 207940: local variable 'abs_gap' referenced before assignment
+```
+**원인**: 월요일 갭 조건 완화 로직에서 `abs_gap` 변수를 정의 전에 참조
+**증상**:
+- 월요일에만 발생 (`enable_monday_relaxation` 활성화 시)
+- 76개 종목에서 분석 실패
+- 후보 종목 0개 선정 → 당일 거래 없음
+
+**수정 위치**: `strategies/orb_strategy.py:348`
+
+**수정 내용**:
+```python
+# Before (버그)
+min_gap_threshold = self.config.min_gap_ratio
+if self.config.enable_monday_relaxation:
+    ...
+    if current_weekday == 0:  # 월요일
+        if self.logger and abs_gap >= ...:  # ❌ abs_gap 미정의
+            ...
+
+abs_gap = abs(gap_ratio)  # 너무 늦게 정의
+
+# After (수정됨)
+min_gap_threshold = self.config.min_gap_ratio
+abs_gap = abs(gap_ratio)  # ✅ 먼저 정의
+if self.config.enable_monday_relaxation:
+    ...
+    if current_weekday == 0:  # 월요일
+        if self.logger and abs_gap >= ...:  # ✅ 정상 작동
+            ...
+```
+
+**영향 범위**: 월요일에만 발생, 화~금요일은 영향 없음
+
 ---
 
 ## 추가 문서
