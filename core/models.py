@@ -171,6 +171,11 @@ class TradingStock:
     last_buy_time: Optional[datetime] = None  # 마지막 매수 체결 시간
     buy_cooldown_minutes: int = 25  # 매수 쿨다운 시간 (분)
 
+    # 🆕 당일 재진입 제한
+    daily_buy_count: int = 0  # 당일 매수 횟수
+    daily_buy_limit: int = 1  # 당일 매수 제한 (1회만 허용)
+    last_buy_date: Optional[datetime] = None  # 마지막 매수 날짜
+
     # 📊 패턴 데이터 로깅용 ID (매매 결과 연결)
     last_pattern_id: Optional[str] = None
 
@@ -255,6 +260,31 @@ class TradingStock:
         time_diff = (current_time - self.last_buy_time).total_seconds() / 60  # 분 단위
         remaining = self.buy_cooldown_minutes - time_diff
         return max(0, int(remaining))
+
+    def can_buy_today(self) -> bool:
+        """당일 매수 가능 여부 확인 (재진입 제한)"""
+        from utils.korean_time import now_kst
+        current_date = now_kst().date()
+
+        # 날짜가 바뀌었으면 카운트 리셋
+        if self.last_buy_date is None or self.last_buy_date.date() != current_date:
+            return True
+
+        # 당일 매수 횟수가 제한 미만이면 매수 가능
+        return self.daily_buy_count < self.daily_buy_limit
+
+    def increment_daily_buy_count(self):
+        """당일 매수 횟수 증가"""
+        from utils.korean_time import now_kst
+        current_time = now_kst()
+        current_date = current_time.date()
+
+        # 날짜가 바뀌었으면 카운트 리셋
+        if self.last_buy_date is None or self.last_buy_date.date() != current_date:
+            self.daily_buy_count = 0
+
+        self.daily_buy_count += 1
+        self.last_buy_date = current_time
 
 
 @dataclass

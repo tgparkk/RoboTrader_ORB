@@ -410,6 +410,11 @@ class DayTradingBot:
                 self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                 return
 
+            # 🆕 당일 재진입 제한 확인 (1회만 허용)
+            if not trading_stock.can_buy_today():
+                self.logger.debug(f"⚠️ {stock_code}: 당일 재진입 제한 (매수 {trading_stock.daily_buy_count}회 완료)")
+                return
+
             # 🆕 타이밍 체크는 _update_intraday_data()에서 이미 수행됨 (3분봉 완성 + 10초 후)
             # 여기서는 종목별 매수 판단만 수행
 
@@ -538,6 +543,9 @@ class DayTradingBot:
 
                             self.logger.info(f"🔥 가상 매수 완료: {stock_code}({stock_name}) "
                                            f"{buy_info['quantity']}주 @{buy_info['buy_price']:,.0f}원 - {buy_reason}")
+
+                            # 🆕 당일 매수 횟수 증가 (재진입 제한용)
+                            trading_stock.increment_daily_buy_count()
                         else:
                             self.logger.warning(f"⚠️ 가상 매수 실패: {stock_code}({stock_name})")
                     except Exception as e:
@@ -560,6 +568,9 @@ class DayTradingBot:
                         )
                         # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
                         self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
+
+                        # 🆕 당일 매수 횟수 증가 (재진입 제한용)
+                        trading_stock.increment_daily_buy_count()
                     except Exception as e:
                         self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
                     
@@ -702,14 +713,14 @@ class DayTradingBot:
                         await self._update_intraday_data()
                         last_intraday_update = current_time
                 
-                # 🆕 과거 후보 종목 데이터 추가 수집 (16:10 실행)
-                if current_time.hour == 16 and current_time.minute >= 10:
+                # 🆕 과거 후보 종목 데이터 추가 수집 (15:45 실행)
+                if current_time.hour == 15 and current_time.minute >= 45:
                     current_date = current_time.date()
                     if self._last_extended_collection_date != current_date:
-                        self.logger.info("🕒 16:10 정기 작업: 과거 후보 종목 데이터 추가 수집 시작")
+                        self.logger.info("🕒 15:45 정기 작업: 과거 후보 종목 데이터 추가 수집 시작")
                         await self.extended_collector.collect_data()
                         self._last_extended_collection_date = current_date
-                        self.logger.info("✅ 16:10 정기 작업 완료")
+                        self.logger.info("✅ 15:45 정기 작업 완료")
 
                 # 장마감 청산 로직 제거: 15:00 시장가 매도로 대체됨
                 

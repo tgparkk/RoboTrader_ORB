@@ -45,7 +45,7 @@ class ORBStrategyConfig:
     # ===== 매수 조건 =====
 
     # 거래량 조건
-    volume_surge_ratio: float = 1.5  # ORB 구간 평균 거래량 대비 1.5배
+    volume_surge_ratio: float = 2.0  # ORB 구간 평균 거래량 대비 2.0배 (기존 1.5배에서 강화)
 
     # 브레이크아웃 확인
     breakout_buffer: float = 0.0  # 브레이크아웃 버퍼 (0%: 정확히 고가 돌파 시)
@@ -56,8 +56,8 @@ class ORBStrategyConfig:
     stop_loss_type: str = "orb_low"  # "orb_low": ORB 저가, "atr": ATR 기반
 
     # 익절 기준
-    take_profit_multiplier: float = 2.0  # ORB range_size × 2.0
-    # 목표가 = ORB 고가 + (range_size × 2.0)
+    take_profit_multiplier: float = 2.5  # ORB range_size × 2.5 (기존 2.0에서 상향)
+    # 목표가 = ORB 고가 + (range_size × 2.5)
 
     # ===== 시간 제한 =====
 
