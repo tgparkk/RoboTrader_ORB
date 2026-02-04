@@ -250,10 +250,19 @@ class TradingDecisionEngine:
                         current_price=current_price
                     )
                 else:
-                    # 포지션이 이미 있으면 업데이트
-                    trading_stock.position.avg_price = current_price
-                    trading_stock.position.quantity = quantity
+                    # 포지션이 이미 있으면 수량 합산 및 평균단가 계산
+                    old_qty = trading_stock.position.quantity or 0
+                    old_avg = trading_stock.position.avg_price or current_price
+                    new_total_qty = old_qty + quantity
+                    # 평균단가 = (기존수량*기존단가 + 신규수량*신규단가) / 총수량
+                    if new_total_qty > 0:
+                        new_avg_price = (old_qty * old_avg + quantity * current_price) / new_total_qty
+                    else:
+                        new_avg_price = current_price
+                    trading_stock.position.quantity = new_total_qty
+                    trading_stock.position.avg_price = new_avg_price
                     trading_stock.position.current_price = current_price
+                    self.logger.debug(f"📊 포지션 합산: {trading_stock.stock_code} 기존 {old_qty}주 + 신규 {quantity}주 = {new_total_qty}주, 평균단가 {new_avg_price:,.0f}원")
 
                 # 손절가/익절가 계산 (전략에서 가져온 값 또는 기본 비율 사용)
                 if hasattr(trading_stock, 'stop_loss_price') and trading_stock.stop_loss_price:
