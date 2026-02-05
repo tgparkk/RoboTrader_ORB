@@ -313,36 +313,47 @@ class TradingDecisionEngine:
                 self.logger.error(f"❌ 가상 매도 실패: 현재가 조회 실패 ({trading_stock.stock_code})")
                 return False
 
-            # DB에서 가상 매수 기록 조회
+            # 포지션에서 매도 수량 결정 (포지션이 진실의 원천)
+            if not trading_stock.position or trading_stock.position.quantity <= 0:
+                self.logger.warning(f"⚠️ 가상 매도 실패: 포지션 정보 없음 ({trading_stock.stock_code})")
+                return False
+
+            quantity = trading_stock.position.quantity
+            buy_price = trading_stock.position.avg_price
+
+            # DB에서 당일 매수 기록 조회 (DB 추적용)
             if not self.db_manager:
                 self.logger.error(f"❌ 가상 매도 실패: DB 매니저 없음")
                 return False
 
-            # 직접 SQL 쿼리로 미체결 포지션 조회
             import sqlite3
+            from utils.korean_time import now_kst
+            today = now_kst().strftime('%Y-%m-%d')
+
             with sqlite3.connect(self.db_manager.db_path) as conn:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT id, price, quantity
                     FROM virtual_trading_records
                     WHERE stock_code = ? AND action = 'BUY'
+                    AND date(timestamp) = ?
                     AND id NOT IN (
                         SELECT buy_record_id FROM virtual_trading_records
                         WHERE action = 'SELL' AND buy_record_id IS NOT NULL
                     )
                     ORDER BY timestamp ASC
                     LIMIT 1
-                ''', (trading_stock.stock_code,))
+                ''', (trading_stock.stock_code, today))
 
                 buy_record = cursor.fetchone()
 
             if not buy_record:
-                self.logger.warning(f"⚠️ 가상 매도 실패: 매수 기록 없음 ({trading_stock.stock_code})")
+                self.logger.warning(f"⚠️ 가상 매도 실패: 당일 매수 기록 없음 ({trading_stock.stock_code})")
                 return False
 
-            buy_id, buy_price, quantity = buy_record
+            buy_id = buy_record[0]
 
-            # 가상 매도 실행 및 DB 기록
+            # 가상 매도 실행 (포지션 수량 사용)
             success = self.virtual_trading.execute_virtual_sell(
                 stock_code=trading_stock.stock_code,
                 stock_name=trading_stock.stock_name,
@@ -355,7 +366,7 @@ class TradingDecisionEngine:
 
             if success:
                 profit = (current_price - buy_price) * quantity
-                profit_rate = ((current_price - buy_price) / buy_price) * 100
+                profit_rate = ((current_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
 
                 self.logger.info(f"✅ 가상 매도 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
                                f"{quantity}주 @{current_price:,.0f}원 "

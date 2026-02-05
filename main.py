@@ -530,10 +530,11 @@ class DayTradingBot:
                             # 상태를 POSITIONED로 반영하여 이후 매도 판단 루프에 포함
                             self.trading_manager._change_stock_state(stock_code, StockState.POSITIONED, "가상 매수 체결")
 
-                            # 가상 포지션 정보 설정 (손절/익절가 계산용)
-                            if trading_stock.position:
-                                trading_stock.position.virtual_buy_id = buy_record_id
-                            else:
+                            # 가상 포지션 정보 설정 (매도 시 매수 기록 추적용)
+                            trading_stock.set_virtual_buy_info(
+                                buy_record_id, buy_info['buy_price'], buy_info['quantity']
+                            )
+                            if not trading_stock.position:
                                 # Position 객체가 없으면 여기서 확인 (execute_virtual_buy에서 생성했어야 함)
                                 self.logger.warning(f"⚠️ {stock_code} 가상 매수 후 포지션 객체 없음 (버그 가능성)")
 
