@@ -11,19 +11,26 @@ from utils.logger import setup_logger
 
 
 class DataCache:
-    """파일 기반 데이터 캐시 관리자"""
-    
-    def __init__(self, cache_dir: str = "cache/minute_data"):
+    """파일 기반 데이터 캐시 관리자 (PostgreSQL 우선 조회)"""
+
+    def __init__(self, cache_dir: str = "cache/minute_data", pg_manager=None):
         self.logger = setup_logger(__name__)
         self.cache_dir = Path(cache_dir)
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.pg = pg_manager
     
     def _get_cache_file(self, stock_code: str, date_str: str) -> Path:
         """캐시 파일 경로 생성"""
         return self.cache_dir / f"{stock_code}_{date_str}.pkl"
     
     def has_data(self, stock_code: str, date_str: str) -> bool:
-        """캐시된 데이터 존재 여부 확인"""
+        """캐시된 데이터 존재 여부 확인 (DB 우선)"""
+        if self.pg:
+            try:
+                if self.pg.has_minute_candles(stock_code, date_str):
+                    return True
+            except Exception:
+                pass
         cache_file = self._get_cache_file(stock_code, date_str)
         return cache_file.exists()
     
@@ -47,19 +54,30 @@ class DataCache:
             return False
     
     def load_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
-        """캐시된 1분봉 데이터 로드"""
+        """캐시된 1분봉 데이터 로드 (DB 우선, pkl fallback)"""
+        # 1. PostgreSQL에서 먼저 시도
+        if self.pg:
+            try:
+                df = self.pg.get_minute_candles(stock_code, date_str)
+                if df is not None and not df.empty:
+                    self.logger.info(f"📁 [{stock_code}] PG에서 1분봉 데이터 로드 ({len(df)}개)")
+                    return df
+            except Exception as e:
+                self.logger.warning(f"PG 로드 실패, pkl fallback ({stock_code}): {e}")
+
+        # 2. pkl fallback
         try:
             cache_file = self._get_cache_file(stock_code, date_str)
-            
+
             if not cache_file.exists():
                 return None
-            
+
             with open(cache_file, 'rb') as f:
                 df_minute = pickle.load(f)
-            
-            self.logger.info(f"📁 [{stock_code}] 캐시에서 1분봉 데이터 로드 ({len(df_minute)}개)")
+
+            self.logger.info(f"📁 [{stock_code}] pkl 캐시에서 1분봉 데이터 로드 ({len(df_minute)}개)")
             return df_minute
-            
+
         except Exception as e:
             self.logger.error(f"캐시 로드 실패 ({stock_code}, {date_str}): {e}")
             return None

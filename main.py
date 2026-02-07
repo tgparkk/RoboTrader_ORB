@@ -59,12 +59,24 @@ class DayTradingBot:
                 strategy_name="orb"
             )
             
-            self.intraday_manager = IntradayStockManager(self.api_manager)  # 🆕 장중 종목 관리자
-            
+            # PostgreSQL 초기화
+            try:
+                from db.postgres_manager import PostgresManager
+                self.pg_manager = PostgresManager()
+            except Exception as pg_err:
+                self.logger.warning(f"PostgreSQL 연결 실패 (pkl fallback): {pg_err}")
+                self.pg_manager = None
+
+            # TelegramIntegration에 pg_manager 연결
+            if self.pg_manager:
+                self.telegram.pg = self.pg_manager
+
+            self.intraday_manager = IntradayStockManager(self.api_manager, pg_manager=self.pg_manager)  # 🆕 장중 종목 관리자
+
             self.trading_manager = TradingStockManager(
                 self.intraday_manager, self.data_collector, self.order_manager, self.telegram
             )  # 🆕 거래 상태 통합 관리자
-            
+
             self.db_manager = DatabaseManager()
             
             self.decision_engine = TradingDecisionEngine(
@@ -78,6 +90,10 @@ class DayTradingBot:
     
             # 🆕 TradingStockManager에 decision_engine 연결 (쿨다운 설정용)
             self.trading_manager.set_decision_engine(self.decision_engine)
+
+            # PostgreSQL 연결을 전략에도 전달
+            if self.pg_manager and self.decision_engine.strategy:
+                self.decision_engine.strategy.pg = self.pg_manager
     
             self.fund_manager = FundManager()  # 🆕 자금 관리자
             self.chart_generator = None  # 🆕 장 마감 후 차트 생성기 (지연 초기화)
@@ -1020,7 +1036,7 @@ class DayTradingBot:
             from strategies.orb_strategy import ORBStrategy
             from config.orb_strategy_config import DEFAULT_ORB_CONFIG
 
-            orb_strategy = ORBStrategy(config=DEFAULT_ORB_CONFIG, logger=self.logger)
+            orb_strategy = ORBStrategy(config=DEFAULT_ORB_CONFIG, logger=self.logger, pg_manager=self.pg_manager)
 
             self.logger.info("🔍 후보 종목 스크리닝 시작...")
             candidates = await orb_strategy.select_daily_candidates(

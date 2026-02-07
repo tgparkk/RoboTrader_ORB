@@ -15,9 +15,10 @@ from utils.korean_time import now_kst, get_market_status
 class TelegramIntegration:
     """텔레그램 통합 관리자"""
     
-    def __init__(self, trading_bot=None):
+    def __init__(self, trading_bot=None, pg_manager=None):
         self.logger = setup_logger(__name__)
         self.trading_bot = trading_bot  # 메인 거래 봇 참조
+        self.pg = pg_manager  # PostgreSQL 매니저
         
         # 텔레그램 설정 로드
         self.config = self._load_telegram_config()
@@ -303,24 +304,135 @@ class TelegramIntegration:
             self.logger.error(f"포지션 현황 알림 실패: {e}")
     
     async def notify_daily_summary(self):
-        """일일 거래 요약 알림"""
-        if not self.is_enabled or not self.notification_settings.get('daily_summary', True):
-            return
-        
+        """일일 거래 요약 알림 + PostgreSQL 저장"""
         try:
-            # 수익률 계산 (임시)
-            return_rate = 0.0  # TODO: 실제 수익률 계산 로직
-            
+            # 일일 요약 데이터 수집
+            summary = self._collect_daily_summary()
+
+            # PostgreSQL에 저장
+            if self.pg and summary:
+                try:
+                    self.pg.save_daily_summary(
+                        trading_date=summary['trading_date'],
+                        stats=summary
+                    )
+                    self.logger.info(f"📊 일일 거래 요약 DB 저장 완료: {summary['trading_date']}")
+                except Exception as pg_e:
+                    self.logger.warning(f"⚠️ 일일 요약 DB 저장 실패: {pg_e}")
+
+            # 텔레그램 알림 전송
+            if not self.is_enabled or not self.notification_settings.get('daily_summary', True):
+                return
+
+            return_rate = 0.0
+            total_pnl = summary.get('realized_pnl', 0) if summary else self.daily_stats['profit_loss']
+            total_trades = summary.get('total_sell_count', 0) if summary else self.daily_stats['trades_count']
+
+            if summary and summary.get('starting_capital', 0) > 0:
+                return_rate = (total_pnl / summary['starting_capital']) * 100
+
             current_date = now_kst().strftime('%Y-%m-%d')
-            
+
             await self.notifier.send_daily_summary(
                 date=current_date,
-                total_trades=self.daily_stats['trades_count'],
+                total_trades=total_trades,
                 return_rate=return_rate,
-                total_pnl=self.daily_stats['profit_loss']
+                total_pnl=total_pnl
             )
         except Exception as e:
             self.logger.error(f"일일 요약 알림 실패: {e}")
+
+    def _collect_daily_summary(self) -> Optional[Dict[str, Any]]:
+        """거래 봇에서 일일 요약 데이터 수집"""
+        try:
+            bot = self.trading_bot
+            if not bot:
+                return None
+
+            today_str = now_kst().strftime('%Y%m%d')
+            summary = {
+                'trading_date': today_str,
+                'candidate_count': 0,
+                'orb_valid_count': 0,
+                'total_buy_count': 0,
+                'total_sell_count': 0,
+                'win_count': 0,
+                'loss_count': 0,
+                'win_rate': 0,
+                'realized_pnl': 0,
+                'starting_capital': 0,
+                'ending_capital': 0,
+                'is_virtual': True,
+                'notes': '',
+            }
+
+            # 가상매매 여부
+            use_virtual = (
+                bot.config.risk_management.use_virtual_trading
+                if hasattr(bot.config.risk_management, 'use_virtual_trading')
+                else False
+            )
+            summary['is_virtual'] = use_virtual
+
+            # 후보 종목 수 (trading_manager 전체)
+            if hasattr(bot, 'trading_manager'):
+                from core.models import StockState
+                all_stocks = bot.trading_manager.get_all_stocks()
+                summary['candidate_count'] = len(all_stocks)
+
+            # ORB 유효 종목 수
+            if hasattr(bot, 'decision_engine') and hasattr(bot.decision_engine, 'strategy'):
+                strategy = bot.decision_engine.strategy
+                if hasattr(strategy, 'orb_data'):
+                    summary['orb_valid_count'] = len(strategy.orb_data)
+
+            # SQLite에서 당일 거래 기록 통계 조회
+            if hasattr(bot, 'db_manager') and bot.db_manager:
+                try:
+                    import sqlite3
+                    with sqlite3.connect(bot.db_manager.db_path) as conn:
+                        cursor = conn.cursor()
+                        # 당일 매수 건수
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM virtual_trading_records WHERE action='BUY' AND DATE(timestamp)=?",
+                            (f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}",)
+                        )
+                        summary['total_buy_count'] = cursor.fetchone()[0]
+
+                        # 당일 매도 건수 및 손익
+                        cursor.execute(
+                            """SELECT COUNT(*),
+                                      COALESCE(SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END), 0),
+                                      COALESCE(SUM(CASE WHEN profit_loss <= 0 THEN 1 ELSE 0 END), 0),
+                                      COALESCE(SUM(profit_loss), 0)
+                               FROM virtual_trading_records
+                               WHERE action='SELL' AND DATE(timestamp)=?""",
+                            (f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}",)
+                        )
+                        row = cursor.fetchone()
+                        summary['total_sell_count'] = row[0]
+                        summary['win_count'] = row[1]
+                        summary['loss_count'] = row[2]
+                        summary['realized_pnl'] = row[3]
+
+                        if summary['total_sell_count'] > 0:
+                            summary['win_rate'] = round(
+                                summary['win_count'] / summary['total_sell_count'] * 100, 2
+                            )
+                except Exception as db_e:
+                    self.logger.warning(f"⚠️ SQLite 거래 통계 조회 실패: {db_e}")
+
+            # 가상 잔고 정보
+            if use_virtual and hasattr(bot, 'decision_engine') and hasattr(bot.decision_engine, 'virtual_trading'):
+                vm = bot.decision_engine.virtual_trading
+                summary['starting_capital'] = vm.initial_balance
+                summary['ending_capital'] = vm.get_virtual_balance()
+
+            return summary
+
+        except Exception as e:
+            self.logger.error(f"일일 요약 데이터 수집 실패: {e}")
+            return None
     
     async def periodic_status_task(self):
         """주기적 상태 알림 태스크"""

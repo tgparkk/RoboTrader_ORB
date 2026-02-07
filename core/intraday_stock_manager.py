@@ -66,14 +66,16 @@ class IntradayStockManager:
     4. 데이터 분석을 위한 편의 함수 제공
     """
     
-    def __init__(self, api_manager):
+    def __init__(self, api_manager, pg_manager=None):
         """
         초기화
 
         Args:
             api_manager: KIS API 매니저 인스턴스
+            pg_manager: PostgreSQL 매니저 인스턴스 (옵션)
         """
         self.api_manager = api_manager
+        self.pg = pg_manager
         self.logger = setup_logger(__name__)
         
         # 메모리 저장소
@@ -90,7 +92,7 @@ class IntradayStockManager:
         self.batch_calculator = DynamicBatchCalculator()
         
         # 🆕 장 마감 후 데이터 저장기
-        self.data_saver = PostMarketDataSaver()
+        self.data_saver = PostMarketDataSaver(pg_manager=self.pg)
         
         # 🆕 데이터 검증기
         self.validator = DataValidator()

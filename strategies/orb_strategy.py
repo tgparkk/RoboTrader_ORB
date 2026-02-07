@@ -41,9 +41,10 @@ class ORBStrategy(TradingStrategy):
     - 시간: 15:00 장마감 청산
     """
 
-    def __init__(self, config: ORBStrategyConfig = None, logger: Any = None):
+    def __init__(self, config: ORBStrategyConfig = None, logger: Any = None, pg_manager=None):
         super().__init__(config or DEFAULT_ORB_CONFIG, logger)
         self.orb_data = {}  # {code: {'high': float, 'low': float, 'avg_volume': float, ...}}
+        self.pg = pg_manager
 
     async def select_daily_candidates(
         self,
@@ -759,7 +760,7 @@ class ORBStrategy(TradingStrategy):
             # 평균 거래량 계산
             avg_volume = df[vol_col].astype(float).mean() if vol_col in df.columns else 0
 
-            # ORB 데이터 저장
+            # ORB 데이터 저장 (메모리)
             self.orb_data[code] = {
                 'high': orb_high,
                 'low': orb_low,
@@ -767,6 +768,31 @@ class ORBStrategy(TradingStrategy):
                 'range_ratio': range_ratio,
                 'avg_volume': avg_volume
             }
+
+            # PostgreSQL에도 저장
+            if self.pg:
+                try:
+                    from utils.korean_time import now_kst
+                    target_price = orb_high + (range_size * self.config.take_profit_multiplier)
+                    self.pg.save_orb_range(
+                        stock_code=code,
+                        stock_name='',
+                        trading_date=now_kst().strftime('%Y%m%d'),
+                        orb_data={
+                            'orb_high': orb_high,
+                            'orb_low': orb_low,
+                            'range_size': range_size,
+                            'range_ratio': range_ratio,
+                            'avg_volume': avg_volume,
+                            'target_price': target_price,
+                            'stop_price': orb_low,
+                            'is_valid': True,
+                            'calculated_at': now_kst(),
+                        }
+                    )
+                except Exception as pg_e:
+                    if self.logger:
+                        self.logger.warning(f"[ORB 전략] PG ORB 저장 실패: {pg_e}")
 
             if self.logger:
                 self.logger.info(

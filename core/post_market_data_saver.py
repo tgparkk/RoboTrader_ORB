@@ -18,7 +18,7 @@ from api.kis_market_api import get_inquire_daily_itemchartprice
 class PostMarketDataSaver:
     """장 마감 후 데이터 저장 클래스"""
 
-    def __init__(self):
+    def __init__(self, pg_manager=None):
         """초기화"""
         self.logger = setup_logger(__name__)
         self.minute_cache_dir = Path("cache/minute_data")
@@ -27,6 +27,9 @@ class PostMarketDataSaver:
         # 디렉토리 생성
         self.minute_cache_dir.mkdir(parents=True, exist_ok=True)
         self.daily_cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # PostgreSQL 매니저 (옵션)
+        self.pg = pg_manager
 
         self.logger.info("장 마감 후 데이터 저장기 초기화 완료")
 
@@ -90,6 +93,13 @@ class PostMarketDataSaver:
                     # pickle로 저장
                     with open(cache_file, 'wb') as f:
                         pickle.dump(combined_data, f)
+
+                    # PostgreSQL에도 저장
+                    if self.pg:
+                        try:
+                            self.pg.save_minute_candles(stock_code, today, combined_data)
+                        except Exception as pg_e:
+                            self.logger.warning(f"⚠️ [{stock_code}] PG 분봉 저장 실패 (pkl은 성공): {pg_e}")
 
                     saved_count += 1
                     self.logger.debug(f"💾 [{stock_code}] 분봉 캐시 저장: {len(combined_data)}건 → {cache_file.name}")
@@ -230,6 +240,13 @@ class PostMarketDataSaver:
                     # pickle로 저장
                     with open(daily_file, 'wb') as f:
                         pickle.dump(daily_data, f)
+
+                    # PostgreSQL에도 저장
+                    if self.pg:
+                        try:
+                            self.pg.save_daily_candles(stock_code, daily_data)
+                        except Exception as pg_e:
+                            self.logger.warning(f"⚠️ [{stock_code}] PG 일봉 저장 실패 (pkl은 성공): {pg_e}")
 
                     # 날짜 범위 정보
                     date_info = ""
