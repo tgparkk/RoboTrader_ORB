@@ -574,10 +574,14 @@ class ORBStrategy(TradingStrategy):
                     f"손절가: {orb_low:,.0f}원)"
                 )
 
+            volume_ratio = current_volume / orb_avg_volume if orb_avg_volume > 0 else 0
+            # 🆕 confidence에 거래량 배수 반영 (높을수록 우선순위 높음)
+            confidence = min(1.0, volume_ratio / 10.0)  # 10배 이상이면 confidence=1.0
+
             return BuySignal(
                 code=code,
-                reason=f"ORB 고가 돌파 (거래량 {current_volume/orb_avg_volume:.1f}배)",
-                confidence=1.0,
+                reason=f"ORB 고가 돌파 (거래량 {volume_ratio:.1f}배)",
+                confidence=confidence,
                 metadata={
                     'orb_high': orb_high,
                     'orb_low': orb_low,
@@ -585,7 +589,7 @@ class ORBStrategy(TradingStrategy):
                     'stop_loss': orb_low,
                     'take_profit': take_profit_price,
                     'entry_price': current_price,
-                    'volume_ratio': current_volume / orb_avg_volume if orb_avg_volume > 0 else 0
+                    'volume_ratio': volume_ratio
                 }
             )
 

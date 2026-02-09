@@ -70,6 +70,10 @@ class ORBStrategyConfig:
 
     # ===== 기타 =====
 
+    # ===== 포지션 제한 =====
+    max_positions: int = 10  # 최대 동시 보유 종목 수
+    position_priority: str = "volume_ratio"  # 우선순위 기준 (거래량 배수)
+
     # 로깅
     enable_pattern_logging: bool = True  # 패턴 데이터 로깅 활성화
 

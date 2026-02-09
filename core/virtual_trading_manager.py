@@ -228,6 +228,24 @@ class VirtualTradingManager:
             self.logger.error(f"❌ 가상 매도 실행 오류: {e}")
             return False
     
+    def get_virtual_position_count(self) -> int:
+        """현재 가상 보유 종목 수 반환"""
+        try:
+            if self.db_manager:
+                import sqlite3
+                with sqlite3.connect(self.db_manager.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT COUNT(DISTINCT stock_code) FROM virtual_trading_records 
+                        WHERE action = 'BUY' 
+                        AND id NOT IN (SELECT buy_record_id FROM virtual_trading_records WHERE action = 'SELL' AND buy_record_id IS NOT NULL)
+                    ''')
+                    return cursor.fetchone()[0]
+            return 0
+        except Exception as e:
+            self.logger.error(f"❌ 가상 보유 종목 수 조회 오류: {e}")
+            return 0
+
     def get_virtual_balance_info(self) -> dict:
         """가상매매 잔고 정보 반환"""
         try:

@@ -420,6 +420,15 @@ class DayTradingBot:
                 self.logger.info(f"⚠️ 보유 중인 종목 매수 신호 무시: {stock_code}({stock_name})")
                 return
 
+            # 🆕 최대 동시 보유 종목 수 제한
+            buy_pending_stocks = self.trading_manager.get_stocks_by_state(StockState.BUY_PENDING)
+            current_position_count = len(positioned_stocks) + len(buy_pending_stocks)
+            from config.orb_strategy_config import DEFAULT_ORB_CONFIG
+            max_positions = DEFAULT_ORB_CONFIG.max_positions
+            if current_position_count >= max_positions:
+                self.logger.info(f"⚠️ 최대 보유 종목 수({max_positions})에 도달, 매수 스킵: {stock_code}")
+                return
+
             # 🆕 25분 매수 쿨다운 확인
             if trading_stock.is_buy_cooldown_active():
                 remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
@@ -1258,7 +1267,19 @@ class DayTradingBot:
                 buy_candidates = selected_stocks + completed_stocks
 
                 if buy_candidates:
-                    self.logger.info(f"🎯 3분봉 완성 후 매수 판단 실행: {current_time.strftime('%H:%M:%S')} - {len(buy_candidates)}개 종목")
+                    # 🆕 거래량 배수 기준 우선순위 정렬 (높은 순)
+                    def _get_volume_ratio(ts):
+                        """종목의 거래량 배수 추출 (ORB 데이터에서)"""
+                        try:
+                            if hasattr(ts, 'orb_data') and ts.orb_data and 'volume_ratio' in ts.orb_data:
+                                return ts.orb_data['volume_ratio']
+                        except Exception:
+                            pass
+                        return 0.0
+
+                    buy_candidates.sort(key=_get_volume_ratio, reverse=True)
+
+                    self.logger.info(f"🎯 3분봉 완성 후 매수 판단 실행: {current_time.strftime('%H:%M:%S')} - {len(buy_candidates)}개 종목 (거래량 우선순위)")
 
                     for trading_stock in buy_candidates:
                         await self._analyze_buy_decision(trading_stock, available_funds)
