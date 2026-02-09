@@ -68,6 +68,12 @@ class ORBStrategyConfig:
     # 청산 시간
     liquidation_time: str = "15:00"  # 장마감 전 청산
 
+    # 시간 기반 트레일링 스탑
+    enable_time_trailing: bool = True        # 시간 트레일링 스탑 활성화
+    trailing_start_time: str = "11:00"       # 트레일링 시작 (수익 +1% 이상 → +0.5% 스탑)
+    breakeven_time: str = "13:00"            # 본전 스탑 (수익 0% 이하 → 즉시 청산)
+    tighten_time: str = "14:00"              # 익절선 축소 (현재 수익의 50%로)
+
     # ===== 기타 =====
 
     # 로깅
