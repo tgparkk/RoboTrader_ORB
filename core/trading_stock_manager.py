@@ -764,6 +764,53 @@ class TradingStockManager:
         except Exception as e:
             self.logger.error(f"❌ 주문 체결 콜백 처리 오류: {e}")
     
+    async def on_order_partial_fill(self, order: 'Order', filled_qty: int):
+        """🆕 [민수] 부분 체결 시 포지션 수량 동기화 콜백"""
+        try:
+            with self._lock:
+                if order.stock_code not in self.trading_stocks:
+                    self.logger.warning(f"⚠️ 부분 체결 콜백: 관리되지 않는 종목 {order.stock_code}")
+                    return
+
+                trading_stock = self.trading_stocks[order.stock_code]
+
+                if order.order_type == OrderType.BUY:
+                    # 매수 부분 체결: 체결된 수량만큼 포지션 업데이트
+                    if trading_stock.position:
+                        trading_stock.position.quantity = filled_qty
+                    else:
+                        from .models import Position
+                        trading_stock.position = Position(
+                            stock_code=order.stock_code,
+                            quantity=filled_qty,
+                            avg_price=order.price,
+                            current_price=order.price
+                        )
+                    self.logger.info(
+                        f"🔄 [부분체결] {order.stock_code} 매수 포지션 동기화: "
+                        f"{filled_qty}/{order.quantity}주 @{order.price:,.0f}원"
+                    )
+
+                elif order.order_type == OrderType.SELL:
+                    # 매도 부분 체결: 잔여 수량으로 포지션 업데이트
+                    remaining = order.quantity - filled_qty
+                    if trading_stock.position:
+                        trading_stock.position.quantity = remaining
+                    self.logger.info(
+                        f"🔄 [부분체결] {order.stock_code} 매도 잔여 포지션: "
+                        f"{remaining}주 (체결 {filled_qty}/{order.quantity}주)"
+                    )
+
+                # 텔레그램 알림
+                if self.telegram:
+                    await self.telegram.notify_system_status(
+                        f"🔄 부분 체결: {order.stock_code} "
+                        f"{order.order_type.value} {filled_qty}/{order.quantity}주"
+                    )
+
+        except Exception as e:
+            self.logger.error(f"❌ 부분 체결 동기화 오류: {e}")
+
     def get_portfolio_summary(self) -> Dict[str, Any]:
         """포트폴리오 전체 현황"""
         try:

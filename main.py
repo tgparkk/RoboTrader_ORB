@@ -281,6 +281,11 @@ class DayTradingBot:
             await self.data_collector.start_collection()
         except Exception as e:
             self.logger.error(f"❌ 데이터 수집 태스크 오류: {e}")
+            await self.telegram.notify_critical(
+                "데이터 수집 태스크 중단",
+                f"오류: {e}",
+                "시스템 재시작 필요"
+            )
     
     async def _order_monitoring_task(self):
         """주문 모니터링 태스크"""
@@ -289,6 +294,11 @@ class DayTradingBot:
             await self.order_manager.start_monitoring()
         except Exception as e:
             self.logger.error(f"❌ 주문 모니터링 태스크 오류: {e}")
+            await self.telegram.notify_critical(
+                "주문 모니터링 태스크 중단",
+                f"오류: {e}",
+                "미체결 주문 수동 확인 필요"
+            )
     
     async def _trading_decision_task(self):
         """매매 의사결정 태스크"""
@@ -349,6 +359,11 @@ class DayTradingBot:
                 
         except Exception as e:
             self.logger.error(f"❌ 매매 의사결정 태스크 오류: {e}")
+            await self.telegram.notify_critical(
+                "매매 의사결정 태스크 중단",
+                f"오류: {e}",
+                "매매 판단 불가 — 시스템 재시작 필요"
+            )
     
     async def _execute_trading_decision(self, available_funds: float = None):
         """매매 판단 시스템 실행 (매도 판단 + 포지션 동기화)
@@ -438,6 +453,16 @@ class DayTradingBot:
             # 🆕 당일 재진입 제한 확인 (1회만 허용)
             if not trading_stock.can_buy_today():
                 self.logger.debug(f"⚠️ {stock_code}: 당일 재진입 제한 (매수 {trading_stock.daily_buy_count}회 완료)")
+                return
+
+            # 🆕 [지영] 일일 손실 한도 체크 — 한도 도달 시 신규 매수 차단
+            if self.decision_engine.virtual_trading.is_daily_loss_limit_reached():
+                pnl_summary = self.decision_engine.virtual_trading.get_daily_pnl_summary()
+                self.logger.warning(
+                    f"🚨 {stock_code}: 일일 손실 한도 도달로 매수 차단 "
+                    f"(누적손실: {pnl_summary['realized_loss']:,.0f}원, "
+                    f"한도: {pnl_summary['loss_limit']:,.0f}원)"
+                )
                 return
 
             # 🆕 타이밍 체크는 _update_intraday_data()에서 이미 수행됨 (3분봉 완성 + 10초 후)
@@ -567,6 +592,13 @@ class DayTradingBot:
                             virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
                             self.fund_manager.update_total_funds(virtual_balance)
 
+                            # 🆕 [지영] 트레일링 스탑용 ORB 메타데이터 설정
+                            trading_stock.metadata = {
+                                'entry_price': buy_info['buy_price'],
+                                'stop_loss': getattr(trading_stock, 'stop_loss_price', 0) or 0,
+                                'take_profit': getattr(trading_stock, 'profit_target_price', 0) or 0,
+                            }
+
                             self.logger.info(f"🔥 가상 매수 완료: {stock_code}({stock_name}) "
                                            f"{buy_info['quantity']}주 @{buy_info['buy_price']:,.0f}원 - {buy_reason}")
 
@@ -651,6 +683,18 @@ class DayTradingBot:
                                 self.fund_manager.update_total_funds(virtual_balance)
 
                                 self.logger.info(f"📉 가상 매도 완료: {stock_code}({stock_name}) - {sell_reason}")
+
+                                # 🆕 [지영] 일일 손실 한도 도달 시 텔레그램 긴급 알림
+                                if self.decision_engine.virtual_trading.is_daily_loss_limit_reached():
+                                    pnl = self.decision_engine.virtual_trading.get_daily_pnl_summary()
+                                    await self.telegram.notify_urgent_signal(
+                                        f"🚨 일일 손실 한도 도달!\n"
+                                        f"누적 손실: {pnl['realized_loss']:,.0f}원\n"
+                                        f"누적 수익: {pnl['realized_profit']:,.0f}원\n"
+                                        f"순 손익: {pnl['net_pnl']:,.0f}원\n"
+                                        f"→ 당일 신규 매수 중단됨"
+                                    )
+
                                 # 상태를 COMPLETED로 변경하여 거래 종료
                                 self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 매도 체결")
                             else:
@@ -666,6 +710,16 @@ class DayTradingBot:
                             self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
                         except Exception as e:
                             self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
+                            # 🆕 [민수] 손절 매도 실패 시 긴급 알림 (VI/네트워크 장애 의심)
+                            if "손절" in sell_reason or "stop_loss" in sell_reason.lower():
+                                await self.telegram.notify_urgent_signal(
+                                    f"🚨 긴급: 손절 매도 실패!\n"
+                                    f"종목: {stock_code}({stock_name})\n"
+                                    f"사유: {sell_reason}\n"
+                                    f"오류: {e}\n"
+                                    f"→ VI 발동 또는 네트워크 장애 의심\n"
+                                    f"→ 수동 매도 확인 필요"
+                                )
         except Exception as e:
             self.logger.error(f"❌ {trading_stock.stock_code} 매도 판단 오류: {e}")
     
@@ -781,8 +835,11 @@ class DayTradingBot:
                 
         except Exception as e:
             self.logger.error(f"❌ 시스템 모니터링 태스크 오류: {e}")
-            # 텔레그램 오류 알림
-            await self.telegram.notify_error("SystemMonitoring", e)
+            await self.telegram.notify_critical(
+                "시스템 모니터링 태스크 중단",
+                f"오류: {e}",
+                "장마감 청산 모니터링 불가 — 확인 필요"
+            )
 
     async def _liquidate_all_positions_end_of_day(self):
         """장 마감 직전 보유 포지션 전량 시장가 일괄 청산"""
@@ -832,6 +889,11 @@ class DayTradingBot:
             
         except Exception as e:
             self.logger.error(f"❌ 장마감 일괄청산 오류: {e}")
+            await self.telegram.notify_critical(
+                "장마감 일괄청산 오류",
+                f"오류: {e}",
+                "보유 포지션 수동 청산 필요"
+            )
     
     async def _execute_end_of_day_liquidation(self):
         """장마감 시간 모든 보유 종목 시장가 일괄매도 (동적 시간 적용). 가상거래 시 가상 매도만 수행."""
@@ -877,6 +939,9 @@ class DayTradingBot:
                     except Exception as se:
                         self.logger.error(f"❌ {eod_hour}:{eod_minute:02d} 가상 청산 개별 오류({trading_stock.stock_code}): {se}")
                 self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 가상 일괄청산 완료")
+
+                # 🆕 [민수] 장 마감 후 메모리 정리
+                self.order_manager.cleanup_completed_orders()
                 return
 
             self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(positioned_stocks)}종목")
@@ -905,6 +970,11 @@ class DayTradingBot:
 
         except Exception as e:
             self.logger.error(f"❌ 장마감 시장가 매도 오류: {e}")
+            await self.telegram.notify_critical(
+                "장마감 일괄 청산 실패",
+                f"오류: {e}",
+                "보유 포지션 수동 청산 필요"
+            )
     
     async def _log_system_status(self):
         """시스템 상태 로깅"""
@@ -938,7 +1008,11 @@ class DayTradingBot:
             # API 매니저 재초기화
             if not self.api_manager.initialize():
                 self.logger.error("❌ API 재초기화 실패")
-                await self.telegram.notify_error("API Refresh", "API 재초기화 실패")
+                await self.telegram.notify_critical(
+                    "API 재초기화 실패",
+                    "API 인증 토큰 갱신에 실패했습니다.\n주문/시세 조회 불가 상태.",
+                    "key.ini 확인 및 수동 재시작"
+                )
                 return False
                 
             self.logger.info("✅ API 재초기화 완료")
@@ -947,7 +1021,11 @@ class DayTradingBot:
             
         except Exception as e:
             self.logger.error(f"❌ API 재초기화 오류: {e}")
-            await self.telegram.notify_error("API Refresh", e)
+            await self.telegram.notify_critical(
+                "API 재초기화 오류",
+                f"오류: {e}",
+                "네트워크 상태 확인 및 수동 재시작"
+            )
             return False
     
     async def _restore_todays_candidates(self):
@@ -1036,7 +1114,10 @@ class DayTradingBot:
 
             if universe is None or universe.empty:
                 self.logger.error("❌ Universe 로드 실패 - Universe 파일이 없거나 비어있습니다")
-                await self.telegram.notify_error("Premarket Selection", "Universe 파일이 없거나 비어있습니다")
+                await self.telegram.notify_warning(
+                    "Universe 로드 실패",
+                    "Universe 파일이 없거나 비어있습니다.\n당일 후보 종목 선정 불가 — 수동 확인 필요"
+                )
                 return
 
             self.logger.info(f"✅ Universe 로드 완료: {len(universe)}개 종목")
@@ -1129,7 +1210,10 @@ class DayTradingBot:
             self.logger.error(f"❌ 장전 후보 종목 선정 실패: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-            await self.telegram.notify_error("Premarket Selection", e)
+            await self.telegram.notify_warning(
+                "장전 후보 종목 선정 실패",
+                f"오류: {e}\n당일 매매 대상 종목 없음 — Universe 파일 확인"
+            )
 
     async def _calculate_orb_ranges(self):
         """ORB 레인지 계산 (09:10 이후 실행)"""
@@ -1199,7 +1283,10 @@ class DayTradingBot:
             self.logger.error(f"❌ ORB 레인지 계산 태스크 오류: {e}")
             import traceback
             self.logger.error(traceback.format_exc())
-            await self.telegram.notify_error("ORB Range Calculation", e)
+            await self.telegram.notify_warning(
+                "ORB 레인지 계산 실패",
+                f"오류: {e}\n당일 ORB 기반 매매 불가능 — 데이터 확인 필요"
+            )
 
     async def _update_intraday_data(self):
         """장중 종목 실시간 데이터 업데이트 + 매수 판단 실행 (완성된 분봉만 수집)"""
@@ -1290,7 +1377,10 @@ class DayTradingBot:
 
         except Exception as e:
             self.logger.error(f"❌ 장중 종목 실시간 데이터 업데이트 오류: {e}")
-            await self.telegram.notify_error("Intraday Data Update", e)
+            await self.telegram.notify_warning(
+                "장중 데이터 업데이트 오류",
+                f"오류: {e}\n매수 판단에 영향 가능 — 다음 주기에 자동 재시도"
+            )
     
     async def _generate_post_market_charts(self):
         """장 마감 후 선정 종목 차트 생성 (15:30 이후)"""
@@ -1410,18 +1500,50 @@ class DayTradingBot:
                 ts.is_buying = False
                 ts.order_processed = True
 
-                # 매수가 기준 고정 비율로 목표가격 계산 (로깅용 - config에서 읽기)
                 buy_price = avg_price
-                take_profit_ratio = self.config.risk_management.take_profit_ratio
-                stop_loss_ratio = self.config.risk_management.stop_loss_ratio
-                target_price = buy_price * (1 + take_profit_ratio)
-                stop_loss = buy_price * (1 - stop_loss_ratio)
+                target_price = None
+                stop_loss = None
+                orb_source = "고정비율"
+
+                # 🆕 [지영] PostgreSQL orb_ranges에서 ORB 기반 손익절가 복원 시도
+                if self.pg_manager:
+                    try:
+                        from utils.korean_time import now_kst
+                        today = now_kst().strftime('%Y-%m-%d')
+                        orb_data = self.pg_manager.execute_query(
+                            "SELECT orb_high, orb_low, range_size FROM orb_ranges "
+                            "WHERE stock_code = %s AND trade_date = %s LIMIT 1",
+                            (code, today)
+                        )
+                        if orb_data and len(orb_data) > 0:
+                            orb_high = float(orb_data[0][0])
+                            orb_low = float(orb_data[0][1])
+                            range_size = float(orb_data[0][2])
+                            from config.orb_strategy_config import DEFAULT_ORB_CONFIG
+                            multiplier = DEFAULT_ORB_CONFIG.take_profit_multiplier
+                            target_price = orb_high + (range_size * multiplier)
+                            stop_loss = orb_low
+                            orb_source = "ORB 레인지"
+                            self.logger.info(f"✅ {code} ORB 데이터 복원: 고가={orb_high:,.0f}, 저가={orb_low:,.0f}, 레인지={range_size:,.0f}")
+                    except Exception as orb_err:
+                        self.logger.warning(f"⚠️ {code} ORB 데이터 조회 실패: {orb_err}")
+
+                # ORB 데이터 없으면 기존 고정 비율 사용
+                if target_price is None:
+                    take_profit_ratio = self.config.risk_management.take_profit_ratio
+                    stop_loss_ratio = self.config.risk_management.stop_loss_ratio
+                    target_price = buy_price * (1 + take_profit_ratio)
+                    stop_loss = buy_price * (1 - stop_loss_ratio)
+
+                # 손익절가 설정
+                ts.profit_target_price = target_price
+                ts.stop_loss_price = stop_loss
 
                 # 상태 변경
                 self.trading_manager._change_stock_state(code, StockState.POSITIONED,
-                    f"잔고복구: {quantity}주 @{buy_price:,.0f}원, 목표: +{take_profit_ratio*100:.1f}%/-{stop_loss_ratio*100:.1f}%")
+                    f"잔고복구({orb_source}): {quantity}주 @{buy_price:,.0f}원")
 
-                self.logger.info(f"✅ {code} 복구완료: 매수 {buy_price:,.0f} → "
+                self.logger.info(f"✅ {code} 복구완료({orb_source}): 매수 {buy_price:,.0f} → "
                                f"목표 {target_price:,.0f} / 손절 {stop_loss:,.0f}")
 
             self.logger.info(f"🔧 총 {len(missing_positions)}개 종목 긴급 복구 완료")
@@ -1438,7 +1560,11 @@ class DayTradingBot:
 
         except Exception as e:
             self.logger.error(f"❌ 긴급 포지션 동기화 실패: {e}")
-            await self.telegram.notify_error("Emergency Position Sync", e)
+            await self.telegram.notify_critical(
+                "긴급 포지션 동기화 실패",
+                f"오류: {e}\n실계좌 포지션과 내부 상태 불일치 가능",
+                "HTS에서 보유 종목 수동 확인"
+            )
 
     async def shutdown(self):
         """시스템 종료"""

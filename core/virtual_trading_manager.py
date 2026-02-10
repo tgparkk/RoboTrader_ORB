@@ -26,7 +26,14 @@ class VirtualTradingManager:
         self.virtual_investment_amount = 10000  # 기본값 (실제 계좌 조회 실패시 사용)
         self.virtual_balance = 0  # 가상 잔고
         self.initial_balance = 0  # 시작 잔고 (수익률 계산용)
-        
+
+        # 🆕 일일 손실 한도 추적
+        self.daily_realized_loss = 0.0  # 당일 누적 실현 손실 (음수)
+        self.daily_realized_profit = 0.0  # 당일 누적 실현 수익 (양수)
+        self.daily_loss_limit_ratio = 0.1  # 일일 최대 손실 비율 (초기 잔고 대비 10%)
+        self._daily_loss_limit_triggered = False  # 손실 한도 도달 플래그
+        self._daily_tracking_date = None  # 추적 날짜 (날짜 변경 시 리셋)
+
         # 장 시작 전에 실제 계좌 잔고로 가상 잔고 초기화
         self._initialize_virtual_balance()
     
@@ -245,6 +252,52 @@ class VirtualTradingManager:
         except Exception as e:
             self.logger.error(f"❌ 가상 보유 종목 수 조회 오류: {e}")
             return 0
+
+    def _reset_daily_tracking_if_needed(self):
+        """날짜가 바뀌면 일일 손실 추적 리셋"""
+        current_date = now_kst().date()
+        if self._daily_tracking_date != current_date:
+            self.daily_realized_loss = 0.0
+            self.daily_realized_profit = 0.0
+            self._daily_loss_limit_triggered = False
+            self._daily_tracking_date = current_date
+            self.logger.info(f"📅 일일 손실 추적 리셋 ({current_date})")
+
+    def record_trade_pnl(self, pnl: float):
+        """매도 체결 시 손익 기록 (일일 손실 한도 추적용)"""
+        self._reset_daily_tracking_if_needed()
+        if pnl < 0:
+            self.daily_realized_loss += pnl  # 음수 누적
+        else:
+            self.daily_realized_profit += pnl
+
+        # 손실 한도 체크
+        max_loss = self.initial_balance * self.daily_loss_limit_ratio
+        if abs(self.daily_realized_loss) >= max_loss:
+            if not self._daily_loss_limit_triggered:
+                self._daily_loss_limit_triggered = True
+                self.logger.warning(
+                    f"🚨 일일 손실 한도 도달! 누적손실: {self.daily_realized_loss:,.0f}원 "
+                    f"(한도: -{max_loss:,.0f}원) → 신규 매수 중단"
+                )
+
+    def is_daily_loss_limit_reached(self) -> bool:
+        """일일 손실 한도 도달 여부 확인"""
+        self._reset_daily_tracking_if_needed()
+        max_loss = self.initial_balance * self.daily_loss_limit_ratio
+        return abs(self.daily_realized_loss) >= max_loss
+
+    def get_daily_pnl_summary(self) -> dict:
+        """당일 손익 요약"""
+        self._reset_daily_tracking_if_needed()
+        max_loss = self.initial_balance * self.daily_loss_limit_ratio
+        return {
+            'realized_loss': self.daily_realized_loss,
+            'realized_profit': self.daily_realized_profit,
+            'net_pnl': self.daily_realized_profit + self.daily_realized_loss,
+            'loss_limit': -max_loss,
+            'limit_reached': self._daily_loss_limit_triggered
+        }
 
     def get_virtual_balance_info(self) -> dict:
         """가상매매 잔고 정보 반환"""

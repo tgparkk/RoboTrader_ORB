@@ -179,6 +179,13 @@ class TradingStock:
     # 📊 패턴 데이터 로깅용 ID (매매 결과 연결)
     last_pattern_id: Optional[str] = None
 
+    # 🆕 [지영] ORB 메타데이터 (트레일링 스탑에서 사용)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    # 🆕 [지영] 손익절가 (ORB 전략에서 설정)
+    stop_loss_price: Optional[float] = None
+    profit_target_price: Optional[float] = None
+
     def change_state(self, new_state: StockState, reason: str = ""):
         """상태 변경 및 이력 기록"""
         old_state = self.state

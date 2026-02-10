@@ -82,14 +82,26 @@ class OrderManager:
             self.logger.error(f"❌ 4분봉 경과 확인 오류: {e}")
             return False
     
-    async def place_buy_order(self, stock_code: str, quantity: int, price: float, 
+    async def place_buy_order(self, stock_code: str, quantity: int, price: float,
                              timeout_seconds: int = None) -> Optional[str]:
         """매수 주문 실행"""
         try:
             timeout_seconds = timeout_seconds or self.config.order_management.buy_timeout_seconds
-            
+
             self.logger.info(f"📈 매수 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초)")
-            
+
+            # 🆕 [민수] 중복 주문 방지: 동일 종목에 미체결 매수 주문이 있는지 확인
+            for pending_order in self.pending_orders.values():
+                if (pending_order.stock_code == stock_code and
+                    pending_order.order_type == OrderType.BUY and
+                    pending_order.status in (OrderStatus.PENDING, OrderStatus.PARTIAL)):
+                    self.logger.warning(
+                        f"🚫 중복 매수 주문 차단: {stock_code} - "
+                        f"기존 미체결 주문 {pending_order.order_id} "
+                        f"({pending_order.filled_quantity}/{pending_order.quantity}주)"
+                    )
+                    return None
+
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
             result: OrderResult = await loop.run_in_executor(
@@ -144,9 +156,20 @@ class OrderManager:
         """매도 주문 실행"""
         try:
             timeout_seconds = timeout_seconds or self.config.order_management.sell_timeout_seconds
-            
+
             self.logger.info(f"📉 매도 주문 시도: {stock_code} {quantity}주 @{price:,.0f}원 (타임아웃: {timeout_seconds}초, 시장가: {market})")
-            
+
+            # 🆕 [민수] 중복 매도 주문 차단: 동일 종목에 미체결 매도 주문 확인
+            for pending_order in self.pending_orders.values():
+                if (pending_order.stock_code == stock_code and
+                    pending_order.order_type == OrderType.SELL and
+                    pending_order.status in (OrderStatus.PENDING, OrderStatus.PARTIAL)):
+                    self.logger.warning(
+                        f"🚫 중복 매도 주문 차단: {stock_code} - "
+                        f"기존 미체결 주문 {pending_order.order_id}"
+                    )
+                    return None
+
             # API 호출을 별도 스레드에서 실행
             loop = asyncio.get_event_loop()
             result: OrderResult = await loop.run_in_executor(
@@ -504,6 +527,14 @@ class OrderManager:
                     if filled_qty + remaining_qty == order.quantity:
                         order.status = OrderStatus.PARTIAL
                         self.logger.info(f"🔄 주문 부분 체결: {order_id} - {filled_qty}/{order.quantity} (잔여 {remaining_qty})")
+
+                        # 🆕 [민수] TradingStockManager에 부분 체결 알림 → 포지션 수량 동기화
+                        if self.trading_manager and hasattr(self.trading_manager, 'on_order_partial_fill'):
+                            try:
+                                await self.trading_manager.on_order_partial_fill(order, filled_qty)
+                                self.logger.info(f"📊 부분 체결 동기화 완료: {order.stock_code} 체결 {filled_qty}주")
+                            except Exception as partial_err:
+                                self.logger.error(f"❌ 부분 체결 동기화 오류: {partial_err}")
                     else:
                         self.logger.warning(f"⚠️ 수량 불일치: 체결({filled_qty}) + 잔여({remaining_qty}) ≠ 주문({order.quantity})")
                 else:
@@ -566,9 +597,9 @@ class OrderManager:
                     order.status = OrderStatus.TIMEOUT
                     self._move_to_completed(order_id)
                     self.logger.warning(f"🔄 예외 발생으로 인한 강제 상태 정리: {order_id}")
-            except:
-                pass
-    
+            except Exception as cleanup_err:
+                self.logger.error(f"❌ 강제 상태 정리 실패 {order_id}: {cleanup_err}")
+
     async def _handle_4candle_timeout(self, order_id: str):
         """3분봉 기준 타임아웃 처리 (매수 주문 후 4봉 지나면 취소)"""
         try:
@@ -628,8 +659,8 @@ class OrderManager:
                     order.status = OrderStatus.TIMEOUT
                     self._move_to_completed(order_id)
                     self.logger.warning(f"🔄 3분봉 타임아웃 예외로 인한 강제 상태 정리: {order_id}")
-            except:
-                pass
+            except Exception as cleanup_err:
+                self.logger.error(f"❌ 3분봉 타임아웃 강제 정리 실패 {order_id}: {cleanup_err}")
     
     async def _check_price_adjustment(self, order_id: str):
         """가격 정정 검토"""
@@ -773,7 +804,14 @@ class OrderManager:
         """모니터링 중단"""
         self.is_monitoring = False
         self.logger.info("주문 모니터링 중단")
-    
+
+    def cleanup_completed_orders(self):
+        """🆕 [민수] 완료된 주문 메모리 정리 (장 마감 후 호출)"""
+        count = len(self.completed_orders)
+        if count > 0:
+            self.completed_orders.clear()
+            self.logger.info(f"🧹 완료된 주문 메모리 정리: {count}건 삭제")
+
     def __del__(self):
         """소멸자"""
         if hasattr(self, 'executor'):

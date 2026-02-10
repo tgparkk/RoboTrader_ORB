@@ -253,11 +253,43 @@ class TelegramIntegration:
         """오류 알림"""
         if not self.is_enabled or not self.notification_settings.get('error_events', True):
             return
-        
+
         try:
             await self.notifier.send_error_alert(module, str(error))
         except Exception as e:
             self.logger.error(f"오류 알림 실패: {e}")
+
+    async def notify_critical(self, title: str, detail: str, action_required: str = ""):
+        """🆕 [현우] CRITICAL 등급 알림 — 즉각 대응 필요한 상황"""
+        if not self.is_enabled:
+            return
+
+        try:
+            message = (
+                f"🔴🔴🔴 CRITICAL 🔴🔴🔴\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"📌 {title}\n\n"
+                f"{detail}\n"
+            )
+            if action_required:
+                message += f"\n⚡ 조치: {action_required}"
+            await self.notifier.send_message(message)
+        except Exception as e:
+            self.logger.error(f"CRITICAL 알림 실패: {e}")
+
+    async def notify_warning(self, title: str, detail: str):
+        """🆕 [현우] WARNING 등급 알림 — 주의 필요한 상황"""
+        if not self.is_enabled:
+            return
+
+        try:
+            message = (
+                f"🟡 WARNING: {title}\n"
+                f"{detail}"
+            )
+            await self.notifier.send_message(message)
+        except Exception as e:
+            self.logger.error(f"WARNING 알림 실패: {e}")
     
     async def notify_system_status(self, message: str = None):
         """시스템 상태 알림"""

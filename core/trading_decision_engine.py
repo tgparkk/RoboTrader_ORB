@@ -36,6 +36,10 @@ class TradingDecisionEngine:
             api_manager=api_manager
         )
 
+        # 🆕 [현우] 매도 판단 유지 로그 스로틀링 (종목별 마지막 로그 시점)
+        self._sell_hold_log_times: Dict[str, float] = {}
+        self._sell_hold_log_interval = 300  # 5분 (초)
+
         # 전략 로드 (전략이 등록되어 있으면)
         self.strategy: Optional[TradingStrategy] = None
         if strategy_name:
@@ -187,12 +191,19 @@ class TradingDecisionEngine:
             except Exception as e:
                 self.logger.error(f"전략 매도 판단 실패 ({trading_stock.stock_code}): {e}")
 
-        sl = getattr(trading_stock, 'stop_loss_price', None) or 0
-        tp = getattr(trading_stock, 'profit_target_price', None) or 0
-        self.logger.debug(
-            f"매도 판단 유지: {trading_stock.stock_code} 현재가 {current_price:,.0f} "
-            f"손절 {sl:,.0f} 익절 {tp:,.0f}"
-        )
+        # 🆕 [현우] 매도 판단 유지 로그: 5분마다 1회만 출력 (로그 폭주 방지)
+        import time as _time
+        stock_code = trading_stock.stock_code
+        now_ts = _time.time()
+        last_log_ts = self._sell_hold_log_times.get(stock_code, 0)
+        if now_ts - last_log_ts >= self._sell_hold_log_interval:
+            sl = getattr(trading_stock, 'stop_loss_price', None) or 0
+            tp = getattr(trading_stock, 'profit_target_price', None) or 0
+            self.logger.debug(
+                f"매도 판단 유지: {stock_code} 현재가 {current_price:,.0f} "
+                f"손절 {sl:,.0f} 익절 {tp:,.0f}"
+            )
+            self._sell_hold_log_times[stock_code] = now_ts
         return False, ""
 
     async def execute_virtual_buy(self, trading_stock, data, reason: str, buy_price: float = None, quantity: int = None):
@@ -367,6 +378,9 @@ class TradingDecisionEngine:
             if success:
                 profit = (current_price - buy_price) * quantity
                 profit_rate = ((current_price - buy_price) / buy_price) * 100 if buy_price > 0 else 0
+
+                # 🆕 일일 손실 한도 추적에 손익 기록
+                self.virtual_trading.record_trade_pnl(profit)
 
                 self.logger.info(f"✅ 가상 매도 성공: {trading_stock.stock_code}({trading_stock.stock_name}) "
                                f"{quantity}주 @{current_price:,.0f}원 "
