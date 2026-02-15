@@ -35,7 +35,7 @@ class ORBStrategyConfig:
     orb_end_time: str = "09:10"    # ORB 종료 시간 (10분)
 
     # 레인지 검증 기준
-    min_range_ratio: float = 0.003  # 최소 레인지 비율 (가격의 0.3%)
+    min_range_ratio: float = 0.005  # 최소 레인지 비율 (가격의 0.5% — 노이즈 돌파 방지)
     max_range_ratio: float = 0.025  # 최대 레인지 비율 (가격의 2.5%)
 
     # ===== ATR 설정 =====
@@ -45,7 +45,7 @@ class ORBStrategyConfig:
     # ===== 매수 조건 =====
 
     # 거래량 조건
-    volume_surge_ratio: float = 2.0  # ORB 구간 평균 거래량 대비 2.0배 (기존 1.5배에서 강화)
+    volume_surge_ratio: float = 2.5  # ORB 구간 평균 거래량 대비 2.5배 (2.0에서 상향 — 가짜 돌파 방지)
 
     # 브레이크아웃 확인
     breakout_buffer: float = 0.0  # 브레이크아웃 버퍼 (0%: 정확히 고가 돌파 시)
@@ -56,7 +56,7 @@ class ORBStrategyConfig:
     stop_loss_type: str = "orb_low"  # "orb_low": ORB 저가, "atr": ATR 기반
 
     # 익절 기준
-    take_profit_multiplier: float = 2.5  # ORB range_size × 2.5 (기존 2.0에서 상향)
+    take_profit_multiplier: float = 2.0  # ORB range_size × 2.0 (2.5에서 하향 — 승률 개선, R:R 균형)
     # 목표가 = ORB 고가 + (range_size × 2.5)
 
     # ===== 시간 제한 =====
@@ -71,8 +71,8 @@ class ORBStrategyConfig:
     # 시간 기반 트레일링 스탑
     enable_time_trailing: bool = True        # 시간 트레일링 스탑 활성화
     trailing_start_time: str = "11:00"       # 트레일링 시작 (수익 +1% 이상 → +0.5% 스탑)
-    breakeven_time: str = "13:00"            # 본전 스탑 (수익 0% 이하 → 즉시 청산)
-    tighten_time: str = "14:00"              # 익절선 축소 (현재 수익의 50%로)
+    breakeven_time: str = "13:30"            # 본전 스탑 (수익 0% 이하 → 즉시 청산) — 13:00→13:30 오후 반등 기회 확보
+    tighten_time: str = "14:20"              # 익절선 축소 (현재 수익의 50%로)
 
     # ===== 기타 =====
 

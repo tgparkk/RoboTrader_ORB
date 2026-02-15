@@ -68,7 +68,9 @@
       "Bash(wmic process where \"name=''python.exe'' and commandline like ''%main.py%''\" delete)",
       "Bash(del NUL)",
       "Bash(del memory_minute_data_*.txt)",
-      "Read(//d/GIT/RoboTrader_orb/**)"
+      "Read(//d/GIT/RoboTrader_orb/**)",
+      "Bash(powershell -Command:*)",
+      "Bash(cut:*)"
     ],
     "deny": [],
     "ask": []
