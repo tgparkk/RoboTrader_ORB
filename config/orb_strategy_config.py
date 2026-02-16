@@ -21,7 +21,7 @@ class ORBStrategyConfig:
 
     # 갭 기준 (전일 종가 대비 당일 시가)
     min_gap_ratio: float = 0.003  # 최소 갭 0.3%
-    max_gap_ratio: float = 0.025  # 최대 갭 2.5% (3%에서 하향 — 큰 갭 되돌림 방지)
+    max_gap_ratio: float = 0.02   # 최대 갭 2.0% (2.5%에서 하향 — 멀티버스 최적값)
     gap_direction: str = "up"     # 갭 방향: "up" (상승), "down" (하락), "both" (양방향)
 
     # 주말 후 시장 대응 (월요일 완화 설정)
@@ -35,7 +35,7 @@ class ORBStrategyConfig:
     orb_end_time: str = "09:10"    # ORB 종료 시간 (10분)
 
     # 레인지 검증 기준
-    min_range_ratio: float = 0.005  # 최소 레인지 비율 (가격의 0.5% — 노이즈 돌파 방지)
+    min_range_ratio: float = 0.007  # 최소 레인지 비율 (가격의 0.7% — 0.5%에서 상향, 노이즈 제거 강화)
     max_range_ratio: float = 0.025  # 최대 레인지 비율 (가격의 2.5%)
 
     # ===== ATR 설정 =====
@@ -45,7 +45,7 @@ class ORBStrategyConfig:
     # ===== 매수 조건 =====
 
     # 거래량 조건
-    volume_surge_ratio: float = 2.5  # ORB 구간 평균 거래량 대비 2.5배 (2.0에서 상향 — 가짜 돌파 방지)
+    volume_surge_ratio: float = 2.0  # ORB 구간 평균 거래량 대비 2.0배 (2.5에서 하향 — 거래 기회 확대)
 
     # 브레이크아웃 확인
     breakout_buffer: float = 0.0  # 브레이크아웃 버퍼 (0%: 정확히 고가 돌파 시)
