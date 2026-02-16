@@ -21,7 +21,7 @@ class ORBStrategyConfig:
 
     # 갭 기준 (전일 종가 대비 당일 시가)
     min_gap_ratio: float = 0.003  # 최소 갭 0.3%
-    max_gap_ratio: float = 0.03   # 최대 갭 3%
+    max_gap_ratio: float = 0.025  # 최대 갭 2.5% (3%에서 하향 — 큰 갭 되돌림 방지)
     gap_direction: str = "up"     # 갭 방향: "up" (상승), "down" (하락), "both" (양방향)
 
     # 주말 후 시장 대응 (월요일 완화 설정)
@@ -71,8 +71,8 @@ class ORBStrategyConfig:
     # 시간 기반 트레일링 스탑
     enable_time_trailing: bool = True        # 시간 트레일링 스탑 활성화
     trailing_start_time: str = "11:00"       # 트레일링 시작 (수익 +1% 이상 → +0.5% 스탑)
-    breakeven_time: str = "13:30"            # 본전 스탑 (수익 0% 이하 → 즉시 청산) — 13:00→13:30 오후 반등 기회 확보
-    tighten_time: str = "14:20"              # 익절선 축소 (현재 수익의 50%로)
+    breakeven_time: str = "14:00"            # 본전 스탑 (수익 0% 이하 → 즉시 청산) — 13:30→14:00 오후 반등 기회 추가 확보
+    tighten_time: str = "14:30"              # 익절선 축소 (현재 수익의 50%로) — 14:20→14:30
 
     # ===== 기타 =====
 
