@@ -35,7 +35,7 @@ class ORBStrategyConfig:
     orb_end_time: str = "09:10"    # ORB 종료 시간 (10분)
 
     # 레인지 검증 기준
-    min_range_ratio: float = 0.007  # 최소 레인지 비율 (가격의 0.7% — 0.5%에서 상향, 노이즈 제거 강화)
+    min_range_ratio: float = 0.010  # 최소 레인지 비율 (가격의 1.0% — 0.7%에서 상향, 12개월+3개월 멀티버스 검증)
     max_range_ratio: float = 0.025  # 최대 레인지 비율 (가격의 2.5%)
 
     # ===== ATR 설정 =====
@@ -71,7 +71,7 @@ class ORBStrategyConfig:
     # 시간 기반 트레일링 스탑
     enable_time_trailing: bool = True        # 시간 트레일링 스탑 활성화
     trailing_start_time: str = "11:00"       # 트레일링 시작 (수익 +1% 이상 → +0.5% 스탑)
-    breakeven_time: str = "14:00"            # 본전 스탑 (수익 0% 이하 → 즉시 청산) — 13:30→14:00 오후 반등 기회 추가 확보
+    breakeven_time: str = "14:30"            # 본전 스탑 (수익 0% 이하 → 즉시 청산) — 14:00→14:30 멀티버스 검증 (두 기간 모두 개선)
     tighten_time: str = "14:30"              # 익절선 축소 (현재 수익의 50%로) — 14:20→14:30
 
     # ===== 기타 =====
