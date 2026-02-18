@@ -250,7 +250,7 @@ def get_universe_age_days() -> int:
     
     # 파일명에서 날짜 추출 (universe_20260103.json)
     date_str = latest_file.stem.split('_')[1]  # '20260103'
-    file_date = datetime.strptime(date_str, '%Y%m%d')
+    file_date = datetime.strptime(date_str, '%Y%m%d').replace(tzinfo=now_kst().tzinfo)
     
     # 현재 날짜와 비교
     today = now_kst()
