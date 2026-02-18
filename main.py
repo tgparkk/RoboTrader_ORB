@@ -593,10 +593,13 @@ class DayTradingBot:
                             self.fund_manager.update_total_funds(virtual_balance)
 
                             # 🆕 [지영] 트레일링 스탑용 ORB 메타데이터 설정
+                            signal_meta = buy_info.get('signal_metadata', {})
                             trading_stock.metadata = {
                                 'entry_price': buy_info['buy_price'],
-                                'stop_loss': getattr(trading_stock, 'stop_loss_price', 0) or 0,
-                                'take_profit': getattr(trading_stock, 'profit_target_price', 0) or 0,
+                                'stop_loss': signal_meta.get('stop_loss', 0) or getattr(trading_stock, 'stop_loss_price', 0) or 0,
+                                'take_profit': signal_meta.get('take_profit', 0) or getattr(trading_stock, 'profit_target_price', 0) or 0,
+                                'orb_high': signal_meta.get('orb_high', 0),
+                                'orb_low': signal_meta.get('orb_low', 0),
                             }
 
                             self.logger.info(f"🔥 가상 매수 완료: {stock_code}({stock_name}) "
@@ -625,6 +628,17 @@ class DayTradingBot:
                             candle_time=current_candle_time
                         )
                         # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+
+                        # 🆕 실거래 모드에서도 트레일링 스탑용 ORB 메타데이터 설정
+                        signal_meta = buy_info.get('signal_metadata', {})
+                        trading_stock.metadata = {
+                            'entry_price': buy_info['buy_price'],
+                            'stop_loss': signal_meta.get('stop_loss', 0) or getattr(trading_stock, 'stop_loss_price', 0) or 0,
+                            'take_profit': signal_meta.get('take_profit', 0) or getattr(trading_stock, 'profit_target_price', 0) or 0,
+                            'orb_high': signal_meta.get('orb_high', 0),
+                            'orb_low': signal_meta.get('orb_low', 0),
+                        }
+
                         self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
 
                         # 🆕 당일 매수 횟수 증가 (재진입 제한용)
@@ -1538,6 +1552,15 @@ class DayTradingBot:
                 # 손익절가 설정
                 ts.profit_target_price = target_price
                 ts.stop_loss_price = stop_loss
+
+                # 🆕 트레일링 스탑용 메타데이터 설정 (포지션 복구 시에도)
+                ts.metadata = {
+                    'entry_price': buy_price,
+                    'stop_loss': stop_loss,
+                    'take_profit': target_price,
+                    'orb_high': orb_high if orb_source == "ORB 레인지" else 0,
+                    'orb_low': orb_low if orb_source == "ORB 레인지" else 0,
+                }
 
                 # 상태 변경
                 self.trading_manager._change_stock_state(code, StockState.POSITIONED,

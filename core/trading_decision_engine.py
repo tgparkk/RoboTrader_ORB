@@ -98,6 +98,10 @@ class TradingDecisionEngine:
             buy_info['quantity'] = quantity
             buy_info['max_buy_amount'] = max_buy_amount
 
+            # ORB 메타데이터 전달 (실거래 모드에서도 트레일링 스탑 작동용)
+            if hasattr(buy_signal, 'metadata') and buy_signal.metadata:
+                buy_info['signal_metadata'] = buy_signal.metadata
+
             return True, buy_signal.reason, buy_info
 
         except Exception as e:
