@@ -35,7 +35,8 @@ def setup_logger(
     log_dir.mkdir(exist_ok=True)
 
     if file_path is None:
-        today = datetime.now().strftime("%Y%m%d")
+        from utils.korean_time import now_kst
+        today = now_kst().strftime("%Y%m%d")
         log_file = log_dir / f"trading_{today}.log"
     else:
         log_file = Path(file_path)

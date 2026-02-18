@@ -21,6 +21,7 @@ from bs4 import BeautifulSoup
 import pandas as pd
 import time
 from datetime import datetime
+from utils.korean_time import now_kst
 from utils.logger import setup_logger
 
 logger = setup_logger(__name__)
@@ -172,7 +173,7 @@ def save_weekly_universe(kospi_count: int = 200, kosdaq_count: int = 100):
     df = pd.DataFrame(all_stocks)
 
     # 5. 파일 저장
-    today = datetime.now().strftime('%Y%m%d')
+    today = now_kst().strftime('%Y%m%d')
 
     # JSON 저장
     json_path = project_root / 'data' / f'universe_{today}.json'
@@ -252,7 +253,7 @@ def get_universe_age_days() -> int:
     file_date = datetime.strptime(date_str, '%Y%m%d')
     
     # 현재 날짜와 비교
-    today = datetime.now()
+    today = now_kst()
     age_days = (today - file_date).days
     
     return age_days

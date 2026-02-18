@@ -533,7 +533,8 @@ class ORBStrategy(TradingStrategy):
             self._ensure_daily_reset()
 
             # 1. 시간 확인
-            now = datetime.now().time()
+            from utils.korean_time import now_kst
+            now = now_kst().time()
             buy_start = time.fromisoformat(self.config.buy_time_start)
             buy_end = time.fromisoformat(self.config.buy_time_end)
 
@@ -644,7 +645,8 @@ class ORBStrategy(TradingStrategy):
         """
         try:
             # 1. 시간 청산 확인
-            now = datetime.now().time()
+            from utils.korean_time import now_kst
+            now = now_kst().time()
             liquidation_time = time.fromisoformat(self.config.liquidation_time)
 
             if now >= liquidation_time:

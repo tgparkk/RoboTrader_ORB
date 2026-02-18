@@ -190,7 +190,8 @@ class TradingStock:
         """상태 변경 및 이력 기록"""
         old_state = self.state
         self.state = new_state
-        self.last_update = datetime.now()
+        from utils.korean_time import now_kst
+        self.last_update = now_kst()
         
         # 상태 변화 이력 기록
         self.state_history.append({
