@@ -1045,27 +1045,22 @@ class DayTradingBot:
     async def _restore_todays_candidates(self):
         """DB에서 오늘 날짜의 후보 종목 복원"""
         try:
-            import sqlite3
-            
-            # DB 경로 (db_manager 활용)
-            db_path = self.db_manager.db_path
-            if not Path(db_path).exists():
-                self.logger.info(f"📊 DB 파일 없음({db_path}) - 후보 종목 복원 건너뜀")
-                return
-            
             # 오늘 날짜
             today = now_kst().strftime('%Y-%m-%d')
-            
-            with sqlite3.connect(str(db_path)) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT DISTINCT stock_code, stock_name, score, reasons 
-                    FROM candidate_stocks 
-                    WHERE DATE(selection_date) = ?
-                    ORDER BY score DESC
-                ''', (today,))
-                
-                rows = cursor.fetchall()
+
+            conn = self.db_manager._get_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute('''
+                        SELECT DISTINCT stock_code, stock_name, score, reasons
+                        FROM candidate_stocks
+                        WHERE DATE(selection_date) = %s
+                        ORDER BY score DESC
+                    ''', (today,))
+
+                    rows = cursor.fetchall()
+            finally:
+                self.db_manager._put_connection(conn)
             
             if not rows:
                 self.logger.info(f"📊 오늘({today}) 후보 종목 없음")

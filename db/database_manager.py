@@ -1,8 +1,10 @@
 """
-데이터베이스 관리 모듈
+데이터베이스 관리 모듈 (PostgreSQL)
 후보 종목 선정 이력 및 관련 데이터 저장/조회
 """
-import sqlite3
+import psycopg2
+import psycopg2.extras
+import psycopg2.pool
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -12,6 +14,7 @@ from dataclasses import dataclass
 from core.candidate_selector import CandidateStock
 from utils.logger import setup_logger
 from utils.korean_time import now_kst
+from config.db_config import DB_CONFIG
 
 
 @dataclass
@@ -39,23 +42,57 @@ class PriceRecord:
 
 
 class DatabaseManager:
-    """데이터베이스 관리자"""
-    
+    """데이터베이스 관리자 (PostgreSQL)"""
+
     def __init__(self, db_path: str = None):
+        """db_path 인자는 하위 호환성을 위해 유지하되 무시됩니다."""
         self.logger = setup_logger(__name__)
-        
-        # 데이터베이스 파일 경로 설정
-        if db_path is None:
-            db_dir = Path(__file__).parent.parent / "data"
-            db_dir.mkdir(exist_ok=True)
-            db_path = db_dir / "robotrader.db"
-        
-        self.db_path = str(db_path)
-        self.logger.info(f"데이터베이스 초기화: {self.db_path}")
-        
-        # 테이블 생성
+
+        # 하위 호환: db_path 속성 유지 (일부 코드가 self.db_manager.db_path 참조)
+        self.db_path = db_path or "postgresql://robotrader_orb"
+
+        self.db_host = DB_CONFIG['host']
+        self.db_port = DB_CONFIG['port']
+        self.db_name = DB_CONFIG['dbname']
+        self.db_user = DB_CONFIG['user']
+        self.db_password = DB_CONFIG['password']
+
+        self.logger.info(f"데이터베이스 초기화: PostgreSQL {self.db_host}:{self.db_port}/{self.db_name}")
+
+        # 연결 풀 초기화
+        self._pool = psycopg2.pool.ThreadedConnectionPool(
+            minconn=2,
+            maxconn=10,
+            host=self.db_host,
+            port=self.db_port,
+            dbname=self.db_name,
+            user=self.db_user,
+            password=self.db_password,
+        )
+        self.logger.info("DB 연결 풀 초기화 완료 (min=2, max=10)")
+
+        # 테이블 생성 (멱등)
         self._create_tables()
 
+    # ------------------------------------------------------------------
+    # 연결 관리
+    # ------------------------------------------------------------------
+    def _get_connection(self):
+        """연결 풀에서 PostgreSQL 연결 획득"""
+        return self._pool.getconn()
+
+    def _put_connection(self, conn):
+        """연결을 풀에 반환"""
+        if conn and not conn.closed:
+            self._pool.putconn(conn)
+
+    def get_connection(self):
+        """외부 코드가 직접 연결을 얻을 수 있도록 공개 메서드 제공"""
+        return self._get_connection()
+
+    # ------------------------------------------------------------------
+    # 헬퍼
+    # ------------------------------------------------------------------
     def _get_today_range_strings(self) -> tuple:
         """KST 기준 오늘의 시작과 내일 시작 시간 문자열(YYYY-MM-DD HH:MM:SS)을 반환."""
         try:
@@ -68,185 +105,189 @@ class DatabaseManager:
                 next_dt.strftime('%Y-%m-%d %H:%M:%S'),
             )
         except Exception:
-            # 안전: 실패 시 넓은 범위 반환
             return ("1970-01-01 00:00:00", "2100-01-01 00:00:00")
 
+    # ------------------------------------------------------------------
+    # 실거래 당일 손실 카운트
+    # ------------------------------------------------------------------
     def get_today_real_loss_count(self, stock_code: str) -> int:
-        """해당 종목의 실거래 기준, 오늘 발생한 손실 매도 건수 반환.
-
-        기준:
-        - real_trading_records에서 action='SELL'이고 profit_loss < 0
-        - timestamp가 KST 오늘 00:00:00 이상, 내일 00:00:00 미만
-        - stock_code 일치
-        """
+        """해당 종목의 실거래 기준, 오늘 발생한 손실 매도 건수 반환."""
+        conn = None
         try:
             start_str, next_str = self._get_today_range_strings()
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute(
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute(
                     '''
                     SELECT COUNT(1)
                     FROM real_trading_records
-                    WHERE stock_code = ?
+                    WHERE stock_code = %s
                       AND action = 'SELL'
                       AND profit_loss < 0
-                      AND timestamp >= ? AND timestamp < ?
+                      AND timestamp >= %s AND timestamp < %s
                     ''',
                     (stock_code, start_str, next_str),
                 )
-                row = cursor.fetchone()
+                row = cur.fetchone()
                 return int(row[0]) if row and row[0] is not None else 0
         except Exception as e:
             self.logger.error(f"실거래 당일 손실 카운트 조회 실패({stock_code}): {e}")
             return 0
-    
+        finally:
+            self._put_connection(conn)
+
+    # ------------------------------------------------------------------
+    # 테이블 생성
+    # ------------------------------------------------------------------
     def _create_tables(self):
         """데이터베이스 테이블 생성"""
+        conn = None
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 # 후보 종목 테이블
-                cursor.execute('''
+                cur.execute('''
                     CREATE TABLE IF NOT EXISTS candidate_stocks (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         stock_code VARCHAR(10) NOT NULL,
                         stock_name VARCHAR(100),
-                        selection_date DATETIME NOT NULL,
+                        selection_date TIMESTAMP NOT NULL,
                         score REAL NOT NULL,
                         reasons TEXT,
                         status VARCHAR(20) DEFAULT 'active',
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 ''')
-                
+
                 # 종목 가격 데이터 테이블
-                cursor.execute('''
+                cur.execute('''
                     CREATE TABLE IF NOT EXISTS stock_prices (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         stock_code VARCHAR(10) NOT NULL,
-                        date_time DATETIME NOT NULL,
+                        date_time TIMESTAMP NOT NULL,
                         open_price REAL,
                         high_price REAL,
                         low_price REAL,
                         close_price REAL,
                         volume INTEGER,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        created_at TIMESTAMP DEFAULT NOW(),
                         UNIQUE(stock_code, date_time)
                     )
                 ''')
-                
-                # 기존 stock_prices 테이블에 인덱스 추가 (조회 성능 향상)
-                cursor.execute('''
-                    CREATE INDEX IF NOT EXISTS idx_stock_prices_stock_datetime 
+
+                cur.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_stock_prices_stock_datetime
                     ON stock_prices(stock_code, date_time)
                 ''')
-                
+
                 # 가상 매매 기록 테이블
-                cursor.execute('''
+                cur.execute('''
                     CREATE TABLE IF NOT EXISTS virtual_trading_records (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         stock_code VARCHAR(10) NOT NULL,
                         stock_name VARCHAR(100),
-                        action VARCHAR(10) NOT NULL,  -- 'BUY' or 'SELL'
+                        action VARCHAR(10) NOT NULL,
                         quantity INTEGER NOT NULL,
                         price REAL NOT NULL,
-                        timestamp DATETIME NOT NULL,
-                        strategy VARCHAR(50),  -- 전략명
-                        reason TEXT,  -- 매매 사유
-                        is_test BOOLEAN DEFAULT 1,  -- 테스트 여부
-                        profit_loss REAL DEFAULT 0,  -- 손익 (매도시에만)
-                        profit_rate REAL DEFAULT 0,  -- 수익률 (매도시에만)
-                        buy_record_id INTEGER,  -- 대응되는 매수 기록 ID (매도시에만)
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        timestamp TIMESTAMP NOT NULL,
+                        strategy VARCHAR(50),
+                        reason TEXT,
+                        is_test BOOLEAN DEFAULT TRUE,
+                        profit_loss REAL DEFAULT 0,
+                        profit_rate REAL DEFAULT 0,
+                        buy_record_id INTEGER,
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 ''')
-                
+
                 # 실거래 매매 기록 테이블
-                cursor.execute('''
+                cur.execute('''
                     CREATE TABLE IF NOT EXISTS real_trading_records (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         stock_code VARCHAR(10) NOT NULL,
                         stock_name VARCHAR(100),
-                        action VARCHAR(10) NOT NULL,  -- 'BUY' or 'SELL'
+                        action VARCHAR(10) NOT NULL,
                         quantity INTEGER NOT NULL,
                         price REAL NOT NULL,
-                        timestamp DATETIME NOT NULL,
-                        strategy VARCHAR(50),  -- 전략명 또는 선정 사유
-                        reason TEXT,  -- 매매 사유
-                        profit_loss REAL DEFAULT 0,  -- 손익 (매도시에만)
-                        profit_rate REAL DEFAULT 0,  -- 수익률 (매도시에만)
-                        buy_record_id INTEGER,  -- 대응되는 매수 기록 ID (매도시에만)
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                        FOREIGN KEY (buy_record_id) REFERENCES real_trading_records (id)
+                        timestamp TIMESTAMP NOT NULL,
+                        strategy VARCHAR(50),
+                        reason TEXT,
+                        profit_loss REAL DEFAULT 0,
+                        profit_rate REAL DEFAULT 0,
+                        buy_record_id INTEGER REFERENCES real_trading_records(id),
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 ''')
-                
+
                 # 매매 기록 테이블 (기존)
-                cursor.execute('''
+                cur.execute('''
                     CREATE TABLE IF NOT EXISTS trading_records (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        id SERIAL PRIMARY KEY,
                         stock_code VARCHAR(10) NOT NULL,
                         action VARCHAR(10) NOT NULL,
                         quantity INTEGER NOT NULL,
                         price REAL NOT NULL,
-                        timestamp DATETIME NOT NULL,
+                        timestamp TIMESTAMP NOT NULL,
                         profit_loss REAL DEFAULT 0,
-                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                        created_at TIMESTAMP DEFAULT NOW()
                     )
                 ''')
-                
+
                 # 인덱스 생성
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_candidate_date ON candidate_stocks(selection_date)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_candidate_code ON candidate_stocks(stock_code)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_price_code_date ON stock_prices(stock_code, date_time)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_trading_code_date ON trading_records(stock_code, timestamp)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_code_date ON virtual_trading_records(stock_code, timestamp)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_test ON virtual_trading_records(is_test)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_real_trading_code_date ON real_trading_records(stock_code, timestamp)')
-                cursor.execute('CREATE INDEX IF NOT EXISTS idx_real_trading_action ON real_trading_records(action)')
-                
-                conn.commit()
-                self.logger.info("데이터베이스 테이블 생성 완료")
-                
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_candidate_date ON candidate_stocks(selection_date)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_candidate_code ON candidate_stocks(stock_code)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_price_code_date ON stock_prices(stock_code, date_time)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_trading_code_date ON trading_records(stock_code, timestamp)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_code_date ON virtual_trading_records(stock_code, timestamp)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_action ON virtual_trading_records(action)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_virtual_trading_test ON virtual_trading_records(is_test)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_real_trading_code_date ON real_trading_records(stock_code, timestamp)')
+                cur.execute('CREATE INDEX IF NOT EXISTS idx_real_trading_action ON real_trading_records(action)')
+
+            conn.commit()
+            self.logger.info("데이터베이스 테이블 생성 완료")
+
         except Exception as e:
             self.logger.error(f"테이블 생성 실패: {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             raise
-    
+        finally:
+            self._put_connection(conn)
+
+    # ------------------------------------------------------------------
+    # 후보 종목 저장/조회
+    # ------------------------------------------------------------------
     def save_candidate_stocks(self, candidates: List[CandidateStock], selection_date: datetime = None) -> bool:
         """후보 종목 목록 저장"""
+        conn = None
         try:
             if not candidates:
                 self.logger.warning("저장할 후보 종목이 없습니다")
                 return True
-            
+
             if selection_date is None:
                 selection_date = now_kst()
-            
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # 당일 이미 저장된 종목 조회 (성능 최적화)
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 target_date = selection_date.strftime('%Y-%m-%d')
-                cursor.execute('''
-                    SELECT DISTINCT stock_code FROM candidate_stocks 
-                    WHERE DATE(selection_date) = ?
+                cur.execute('''
+                    SELECT DISTINCT stock_code FROM candidate_stocks
+                    WHERE DATE(selection_date) = %s
                 ''', (target_date,))
-                
-                existing_stocks = {row[0] for row in cursor.fetchall()}
-                
-                # 당일 처음 발견되는 종목만 저장
+
+                existing_stocks = {row[0] for row in cur.fetchall()}
+
                 new_candidates = 0
                 duplicate_candidates = 0
-                
+
                 for candidate in candidates:
                     if candidate.code not in existing_stocks:
-                        # 해당 날짜에 처음 발견되는 종목만 저장
-                        cursor.execute('''
-                            INSERT INTO candidate_stocks 
+                        cur.execute('''
+                            INSERT INTO candidate_stocks
                             (stock_code, stock_name, selection_date, score, reasons, status, created_at)
-                            VALUES (?, ?, ?, ?, ?, 'active', ?)
+                            VALUES (%s, %s, %s, %s, %s, 'active', %s)
                         ''', (
                             candidate.code,
                             candidate.name,
@@ -256,42 +297,51 @@ class DatabaseManager:
                             now_kst().strftime('%Y-%m-%d %H:%M:%S')
                         ))
                         new_candidates += 1
-                        existing_stocks.add(candidate.code)  # 추가된 종목을 세트에 추가
+                        existing_stocks.add(candidate.code)
                     else:
                         duplicate_candidates += 1
-                        #self.logger.debug(f"📝 {candidate.code}({candidate.name}) 당일 이미 저장됨 - 중복 제외")
-                
-                conn.commit()
-                
-                if new_candidates > 0:
-                    self.logger.info(f"✅ 새로운 후보 종목 {new_candidates}개 저장 완료")
-                    if duplicate_candidates > 0:
-                        #self.logger.info(f"   중복 제외: {duplicate_candidates}개 (당일 이미 저장됨)")
-                        pass
-                    self.logger.info(f"   전체 후보: {len(candidates)}개, 날짜: {selection_date.strftime('%Y-%m-%d %H:%M:%S')}")
-                else:
-                    self.logger.info(f"📝 모든 후보 종목이 당일 이미 저장되어 있음 ({len(candidates)}개 모두 중복)")
-                
-                return True
-                
+
+            conn.commit()
+
+            if new_candidates > 0:
+                self.logger.info(f"✅ 새로운 후보 종목 {new_candidates}개 저장 완료")
+                if duplicate_candidates > 0:
+                    pass
+                self.logger.info(f"   전체 후보: {len(candidates)}개, 날짜: {selection_date.strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                self.logger.info(f"📝 모든 후보 종목이 당일 이미 저장되어 있음 ({len(candidates)}개 모두 중복)")
+
+            return True
+
         except Exception as e:
             self.logger.error(f"후보 종목 저장 실패: {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return False
-    
+        finally:
+            self._put_connection(conn)
+
     def save_price_data(self, stock_code: str, price_data: List[PriceRecord]) -> bool:
         """가격 데이터 저장"""
+        conn = None
         try:
             if not price_data:
                 return True
-            
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 for record in price_data:
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO stock_prices 
+                    cur.execute('''
+                        INSERT INTO stock_prices
                         (stock_code, date_time, open_price, high_price, low_price, close_price, volume, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (stock_code, date_time) DO UPDATE SET
+                            open_price = EXCLUDED.open_price,
+                            high_price = EXCLUDED.high_price,
+                            low_price = EXCLUDED.low_price,
+                            close_price = EXCLUDED.close_price,
+                            volume = EXCLUDED.volume,
+                            created_at = EXCLUDED.created_at
                     ''', (
                         stock_code,
                         record.date_time.strftime('%Y-%m-%d %H:%M:%S'),
@@ -302,41 +352,50 @@ class DatabaseManager:
                         record.volume,
                         now_kst().strftime('%Y-%m-%d %H:%M:%S')
                     ))
-                
-                conn.commit()
-                self.logger.debug(f"{stock_code} 가격 데이터 {len(price_data)}개 저장")
-                return True
-                
+
+            conn.commit()
+            self.logger.debug(f"{stock_code} 가격 데이터 {len(price_data)}개 저장")
+            return True
+
         except Exception as e:
             self.logger.error(f"가격 데이터 저장 실패 ({stock_code}): {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return False
-    
+        finally:
+            self._put_connection(conn)
+
     def save_minute_data(self, stock_code: str, date_str: str, df_minute: pd.DataFrame) -> bool:
         """1분봉 데이터를 기존 stock_prices 테이블에 저장"""
+        conn = None
         try:
             if df_minute is None or df_minute.empty:
                 return True
-            
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # 기존 데이터 삭제 (해당 종목, 해당 날짜의 모든 데이터)
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
                 end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-                
-                cursor.execute('''
-                    DELETE FROM stock_prices 
-                    WHERE stock_code = ? 
-                    AND date_time >= ? 
-                    AND date_time <= ?
+
+                cur.execute('''
+                    DELETE FROM stock_prices
+                    WHERE stock_code = %s
+                    AND date_time >= %s
+                    AND date_time <= %s
                 ''', (stock_code, start_datetime, end_datetime))
-                
-                # 새 데이터 삽입
+
                 for _, row in df_minute.iterrows():
-                    cursor.execute('''
-                        INSERT OR REPLACE INTO stock_prices 
+                    cur.execute('''
+                        INSERT INTO stock_prices
                         (stock_code, date_time, open_price, high_price, low_price, close_price, volume, created_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (stock_code, date_time) DO UPDATE SET
+                            open_price = EXCLUDED.open_price,
+                            high_price = EXCLUDED.high_price,
+                            low_price = EXCLUDED.low_price,
+                            close_price = EXCLUDED.close_price,
+                            volume = EXCLUDED.volume,
+                            created_at = EXCLUDED.created_at
                     ''', (
                         stock_code,
                         row['datetime'].strftime('%Y-%m-%d %H:%M:%S'),
@@ -347,239 +406,260 @@ class DatabaseManager:
                         row['volume'],
                         now_kst().strftime('%Y-%m-%d %H:%M:%S')
                     ))
-                
-                conn.commit()
-                self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df_minute)}개 저장 ({date_str})")
-                return True
-                
+
+            conn.commit()
+            self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df_minute)}개 저장 ({date_str})")
+            return True
+
         except Exception as e:
             self.logger.error(f"1분봉 데이터 저장 실패 ({stock_code}, {date_str}): {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return False
-    
+        finally:
+            self._put_connection(conn)
+
     def get_minute_data(self, stock_code: str, date_str: str) -> Optional[pd.DataFrame]:
         """1분봉 데이터를 기존 stock_prices 테이블에서 조회"""
+        conn = None
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
-                end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-                
-                query = '''
-                    SELECT date_time, open_price, high_price, low_price, close_price, volume
-                    FROM stock_prices 
-                    WHERE stock_code = ? 
-                    AND date_time >= ? 
-                    AND date_time <= ?
-                    ORDER BY date_time
-                '''
-                
-                df = pd.read_sql_query(query, conn, params=(stock_code, start_datetime, end_datetime))
-                
-                if df.empty:
-                    return None
-                
-                # datetime 컬럼을 datetime 타입으로 변환
-                df['datetime'] = pd.to_datetime(df['date_time'])
-                df = df.drop('date_time', axis=1)  # 원본 컬럼 제거
-                
-                # 컬럼명을 표준 형식으로 변경
-                df = df.rename(columns={
-                    'open_price': 'open',
-                    'high_price': 'high',
-                    'low_price': 'low',
-                    'close_price': 'close'
-                })
-                
-                self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df)}개 조회 ({date_str})")
-                return df
-                
+            conn = self._get_connection()
+            start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
+            end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
+
+            query = '''
+                SELECT date_time, open_price, high_price, low_price, close_price, volume
+                FROM stock_prices
+                WHERE stock_code = %s
+                AND date_time >= %s
+                AND date_time <= %s
+                ORDER BY date_time
+            '''
+
+            df = pd.read_sql_query(query, conn, params=(stock_code, start_datetime, end_datetime))
+
+            if df.empty:
+                return None
+
+            df['datetime'] = pd.to_datetime(df['date_time'])
+            df = df.drop('date_time', axis=1)
+
+            df = df.rename(columns={
+                'open_price': 'open',
+                'high_price': 'high',
+                'low_price': 'low',
+                'close_price': 'close'
+            })
+
+            self.logger.debug(f"{stock_code} 1분봉 데이터 {len(df)}개 조회 ({date_str})")
+            return df
+
         except Exception as e:
             self.logger.error(f"1분봉 데이터 조회 실패 ({stock_code}, {date_str}): {e}")
             return None
-    
+        finally:
+            self._put_connection(conn)
+
     def has_minute_data(self, stock_code: str, date_str: str) -> bool:
         """해당 종목의 해당 날짜 1분봉 데이터가 DB에 있는지 확인"""
+        conn = None
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 start_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 00:00:00"
                 end_datetime = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]} 23:59:59"
-                
-                cursor.execute('''
-                    SELECT COUNT(1) FROM stock_prices 
-                    WHERE stock_code = ? 
-                    AND date_time >= ? 
-                    AND date_time <= ?
+
+                cur.execute('''
+                    SELECT COUNT(1) FROM stock_prices
+                    WHERE stock_code = %s
+                    AND date_time >= %s
+                    AND date_time <= %s
                 ''', (stock_code, start_datetime, end_datetime))
-                
-                count = cursor.fetchone()[0]
+
+                count = cur.fetchone()[0]
                 return count > 0
-                
+
         except Exception as e:
             self.logger.error(f"1분봉 데이터 존재 확인 실패 ({stock_code}, {date_str}): {e}")
             return False
+        finally:
+            self._put_connection(conn)
 
     def get_candidate_history(self, days: int = 30) -> pd.DataFrame:
         """후보 종목 선정 이력 조회"""
+        conn = None
         try:
             start_date = now_kst() - timedelta(days=days)
-            
-            with sqlite3.connect(self.db_path) as conn:
-                query = '''
-                    SELECT 
-                        stock_code,
-                        stock_name,
-                        selection_date,
-                        score,
-                        reasons,
-                        status
-                    FROM candidate_stocks 
-                    WHERE selection_date >= ?
-                    ORDER BY selection_date DESC, score DESC
-                '''
-                
-                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
-                df['selection_date'] = pd.to_datetime(df['selection_date'])
-                
-                self.logger.info(f"후보 종목 이력 {len(df)}건 조회 ({days}일)")
-                return df
-                
+
+            conn = self._get_connection()
+            query = '''
+                SELECT
+                    stock_code,
+                    stock_name,
+                    selection_date,
+                    score,
+                    reasons,
+                    status
+                FROM candidate_stocks
+                WHERE selection_date >= %s
+                ORDER BY selection_date DESC, score DESC
+            '''
+
+            df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
+            df['selection_date'] = pd.to_datetime(df['selection_date'])
+
+            self.logger.info(f"후보 종목 이력 {len(df)}건 조회 ({days}일)")
+            return df
+
         except Exception as e:
             self.logger.error(f"후보 종목 이력 조회 실패: {e}")
             return pd.DataFrame()
-    
+        finally:
+            self._put_connection(conn)
+
     def get_price_history(self, stock_code: str, days: int = 30) -> pd.DataFrame:
         """종목별 가격 이력 조회"""
+        conn = None
         try:
             start_date = now_kst() - timedelta(days=days)
-            
-            with sqlite3.connect(self.db_path) as conn:
-                query = '''
-                    SELECT 
-                        date_time,
-                        open_price,
-                        high_price,
-                        low_price,
-                        close_price,
-                        volume
-                    FROM stock_prices 
-                    WHERE stock_code = ? AND date_time >= ?
-                    ORDER BY date_time ASC
-                '''
-                
-                df = pd.read_sql_query(query, conn, params=(stock_code, start_date.strftime('%Y-%m-%d %H:%M:%S')))
-                df['date_time'] = pd.to_datetime(df['date_time'])
-                
-                self.logger.debug(f"{stock_code} 가격 이력 {len(df)}건 조회")
-                return df
-                
+
+            conn = self._get_connection()
+            query = '''
+                SELECT
+                    date_time,
+                    open_price,
+                    high_price,
+                    low_price,
+                    close_price,
+                    volume
+                FROM stock_prices
+                WHERE stock_code = %s AND date_time >= %s
+                ORDER BY date_time ASC
+            '''
+
+            df = pd.read_sql_query(query, conn, params=(stock_code, start_date.strftime('%Y-%m-%d %H:%M:%S')))
+            df['date_time'] = pd.to_datetime(df['date_time'])
+
+            self.logger.debug(f"{stock_code} 가격 이력 {len(df)}건 조회")
+            return df
+
         except Exception as e:
             self.logger.error(f"가격 이력 조회 실패 ({stock_code}): {e}")
             return pd.DataFrame()
-    
+        finally:
+            self._put_connection(conn)
+
     def get_candidate_performance(self, days: int = 30) -> pd.DataFrame:
         """후보 종목 성과 분석"""
+        conn = None
         try:
             start_date = now_kst() - timedelta(days=days)
-            
-            with sqlite3.connect(self.db_path) as conn:
-                query = '''
-                    SELECT 
-                        c.stock_code,
-                        c.stock_name,
-                        c.selection_date,
-                        c.score,
-                        COUNT(p.id) as price_records,
-                        AVG(p.close_price) as avg_price,
-                        MAX(p.high_price) as max_price,
-                        MIN(p.low_price) as min_price
-                    FROM candidate_stocks c
-                    LEFT JOIN stock_prices p ON c.stock_code = p.stock_code 
-                        AND p.date_time >= c.selection_date
-                    WHERE c.selection_date >= ?
-                    GROUP BY c.id
-                    ORDER BY c.selection_date DESC, c.score DESC
-                '''
-                
-                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
-                df['selection_date'] = pd.to_datetime(df['selection_date'])
-                
-                return df
-                
+
+            conn = self._get_connection()
+            query = '''
+                SELECT
+                    c.stock_code,
+                    c.stock_name,
+                    c.selection_date,
+                    c.score,
+                    COUNT(p.id) as price_records,
+                    AVG(p.close_price) as avg_price,
+                    MAX(p.high_price) as max_price,
+                    MIN(p.low_price) as min_price
+                FROM candidate_stocks c
+                LEFT JOIN stock_prices p ON c.stock_code = p.stock_code
+                    AND p.date_time >= c.selection_date
+                WHERE c.selection_date >= %s
+                GROUP BY c.id, c.stock_code, c.stock_name, c.selection_date, c.score
+                ORDER BY c.selection_date DESC, c.score DESC
+            '''
+
+            df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
+            df['selection_date'] = pd.to_datetime(df['selection_date'])
+
+            return df
+
         except Exception as e:
             self.logger.error(f"성과 분석 조회 실패: {e}")
             return pd.DataFrame()
-    
+        finally:
+            self._put_connection(conn)
+
     def get_daily_candidate_count(self, days: int = 30) -> pd.DataFrame:
         """일별 후보 종목 선정 수"""
+        conn = None
         try:
             start_date = now_kst() - timedelta(days=days)
-            
-            with sqlite3.connect(self.db_path) as conn:
-                query = '''
-                    SELECT 
-                        DATE(selection_date) as date,
-                        COUNT(*) as count,
-                        AVG(score) as avg_score,
-                        MAX(score) as max_score
-                    FROM candidate_stocks 
-                    WHERE selection_date >= ?
-                    GROUP BY DATE(selection_date)
-                    ORDER BY date DESC
-                '''
-                
-                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
-                df['date'] = pd.to_datetime(df['date'])
-                
-                return df
-                
+
+            conn = self._get_connection()
+            query = '''
+                SELECT
+                    DATE(selection_date) as date,
+                    COUNT(*) as count,
+                    AVG(score) as avg_score,
+                    MAX(score) as max_score
+                FROM candidate_stocks
+                WHERE selection_date >= %s
+                GROUP BY DATE(selection_date)
+                ORDER BY date DESC
+            '''
+
+            df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
+            df['date'] = pd.to_datetime(df['date'])
+
+            return df
+
         except Exception as e:
             self.logger.error(f"일별 통계 조회 실패: {e}")
             return pd.DataFrame()
-    
+        finally:
+            self._put_connection(conn)
+
     def cleanup_old_data(self, keep_days: int = 90):
         """오래된 데이터 정리"""
+        conn = None
         try:
             cutoff_date = now_kst() - timedelta(days=keep_days)
-            
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                # 오래된 후보 종목 데이터 삭제
-                cursor.execute('''
-                    DELETE FROM candidate_stocks 
-                    WHERE selection_date < ?
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute('''
+                    DELETE FROM candidate_stocks
+                    WHERE selection_date < %s
                 ''', (cutoff_date.strftime('%Y-%m-%d %H:%M:%S'),))
-                
-                # 오래된 가격 데이터 삭제
-                cursor.execute('''
-                    DELETE FROM stock_prices 
-                    WHERE date_time < ?
+
+                cur.execute('''
+                    DELETE FROM stock_prices
+                    WHERE date_time < %s
                 ''', (cutoff_date.strftime('%Y-%m-%d %H:%M:%S'),))
-                
-                conn.commit()
-                self.logger.info(f"{keep_days}일 이전 데이터 정리 완료")
-                
+
+            conn.commit()
+            self.logger.info(f"{keep_days}일 이전 데이터 정리 완료")
+
         except Exception as e:
             self.logger.error(f"데이터 정리 실패: {e}")
-    
+            if conn and not conn.closed:
+                conn.rollback()
+        finally:
+            self._put_connection(conn)
+
     def get_database_stats(self) -> Dict[str, int]:
         """데이터베이스 통계"""
+        conn = None
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 stats = {}
-                
-                # 테이블별 레코드 수
                 for table in ['candidate_stocks', 'stock_prices', 'trading_records', 'virtual_trading_records', 'real_trading_records']:
-                    cursor.execute(f'SELECT COUNT(*) FROM {table}')
-                    stats[table] = cursor.fetchone()[0]
-                
+                    cur.execute(f'SELECT COUNT(*) FROM {table}')
+                    stats[table] = cur.fetchone()[0]
                 return stats
-                
+
         except Exception as e:
             self.logger.error(f"통계 조회 실패: {e}")
             return {}
+        finally:
+            self._put_connection(conn)
 
     # ============================
     # 실거래 저장/조회 API
@@ -588,274 +668,305 @@ class DatabaseManager:
                       quantity: int, strategy: str = '', reason: str = '',
                       timestamp: datetime = None) -> Optional[int]:
         """실거래 매수 기록 저장"""
+        conn = None
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO real_trading_records 
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute('''
+                    INSERT INTO real_trading_records
                     (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, created_at)
-                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, 'BUY', %s, %s, %s, %s, %s, %s)
+                    RETURNING id
                 ''', (
                     stock_code, stock_name, quantity, price,
                     timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
                     now_kst().strftime('%Y-%m-%d %H:%M:%S')
                 ))
-                rec_id = cursor.lastrowid
-                conn.commit()
-                self.logger.info(f"✅ 실거래 매수 기록 저장: {stock_code} {quantity}주 @{price:,.0f}")
-                return rec_id
+                rec_id = cur.fetchone()[0]
+            conn.commit()
+            self.logger.info(f"✅ 실거래 매수 기록 저장: {stock_code} {quantity}주 @{price:,.0f}")
+            return rec_id
         except Exception as e:
             self.logger.error(f"실거래 매수 기록 저장 실패: {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return None
+        finally:
+            self._put_connection(conn)
 
     def save_real_sell(self, stock_code: str, stock_name: str, price: float,
                        quantity: int, strategy: str = '', reason: str = '',
                        buy_record_id: Optional[int] = None, timestamp: datetime = None) -> bool:
         """실거래 매도 기록 저장 (손익 계산 포함)"""
+        conn = None
         try:
             if timestamp is None:
                 timestamp = now_kst()
             buy_price = None
             if buy_record_id:
-                with sqlite3.connect(self.db_path) as conn:
-                    cursor = conn.cursor()
-                    cursor.execute('''
-                        SELECT price FROM real_trading_records 
-                        WHERE id = ? AND action = 'BUY'
+                conn = self._get_connection()
+                with conn.cursor() as cur:
+                    cur.execute('''
+                        SELECT price FROM real_trading_records
+                        WHERE id = %s AND action = 'BUY'
                     ''', (buy_record_id,))
-                    row = cursor.fetchone()
+                    row = cur.fetchone()
                     if row:
                         buy_price = float(row[0])
+                self._put_connection(conn)
+                conn = None
+
             profit_loss = 0.0
             profit_rate = 0.0
             if buy_price and buy_price > 0:
                 profit_loss = (price - buy_price) * quantity
                 profit_rate = (price - buy_price) / buy_price * 100.0
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO real_trading_records 
-                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute('''
+                    INSERT INTO real_trading_records
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason,
                      profit_loss, profit_rate, buy_record_id, created_at)
-                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (%s, %s, 'SELL', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ''', (
                     stock_code, stock_name, quantity, price,
                     timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason,
                     profit_loss, profit_rate, buy_record_id,
                     now_kst().strftime('%Y-%m-%d %H:%M:%S')
                 ))
-                conn.commit()
-                self.logger.info(
-                    f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} 손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%)"
-                )
-                return True
+            conn.commit()
+            self.logger.info(
+                f"✅ 실거래 매도 기록 저장: {stock_code} {quantity}주 @{price:,.0f} 손익 {profit_loss:+,.0f}원 ({profit_rate:+.2f}%)"
+            )
+            return True
         except Exception as e:
             self.logger.error(f"실거래 매도 기록 저장 실패: {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return False
+        finally:
+            self._put_connection(conn)
 
     def get_last_open_real_buy(self, stock_code: str) -> Optional[int]:
         """해당 종목의 미매칭 매수(가장 최근) ID 조회"""
+        conn = None
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT b.id 
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute('''
+                    SELECT b.id
                     FROM real_trading_records b
-                    WHERE b.stock_code = ? AND b.action = 'BUY'
+                    WHERE b.stock_code = %s AND b.action = 'BUY'
                       AND NOT EXISTS (
-                        SELECT 1 FROM real_trading_records s 
+                        SELECT 1 FROM real_trading_records s
                         WHERE s.buy_record_id = b.id AND s.action = 'SELL'
                       )
                     ORDER BY b.timestamp DESC
                     LIMIT 1
                 ''', (stock_code,))
-                row = cursor.fetchone()
+                row = cur.fetchone()
                 return int(row[0]) if row else None
         except Exception as e:
             self.logger.error(f"실거래 미매칭 매수 조회 실패: {e}")
             return None
-    
-    def save_virtual_buy(self, stock_code: str, stock_name: str, price: float, 
-                        quantity: int, strategy: str, reason: str, 
+        finally:
+            self._put_connection(conn)
+
+    def save_virtual_buy(self, stock_code: str, stock_name: str, price: float,
+                        quantity: int, strategy: str, reason: str,
                         timestamp: datetime = None) -> Optional[int]:
         """가상 매수 기록 저장"""
+        conn = None
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
-                cursor.execute('''
-                    INSERT INTO virtual_trading_records 
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
+                cur.execute('''
+                    INSERT INTO virtual_trading_records
                     (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, is_test, created_at)
-                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, ?, 1, ?)
+                    VALUES (%s, %s, 'BUY', %s, %s, %s, %s, %s, TRUE, %s)
+                    RETURNING id
                 ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), strategy, reason, now_kst().strftime('%Y-%m-%d %H:%M:%S')))
-                
-                buy_record_id = cursor.lastrowid
-                conn.commit()
-                
-                self.logger.info(f"🔥 가상 매수 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - {strategy}")
-                return buy_record_id
-                
+
+                buy_record_id = cur.fetchone()[0]
+            conn.commit()
+
+            self.logger.info(f"🔥 가상 매수 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - {strategy}")
+            return buy_record_id
+
         except Exception as e:
             self.logger.error(f"가상 매수 기록 저장 실패: {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return None
-    
-    def save_virtual_sell(self, stock_code: str, stock_name: str, price: float, 
-                         quantity: int, strategy: str, reason: str, 
+        finally:
+            self._put_connection(conn)
+
+    def save_virtual_sell(self, stock_code: str, stock_name: str, price: float,
+                         quantity: int, strategy: str, reason: str,
                          buy_record_id: int, timestamp: datetime = None) -> bool:
         """가상 매도 기록 저장"""
+        conn = None
         try:
             if timestamp is None:
                 timestamp = now_kst()
-            
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                
+
+            conn = self._get_connection()
+            with conn.cursor() as cur:
                 # 매수 기록 조회
-                cursor.execute('''
-                    SELECT price FROM virtual_trading_records 
-                    WHERE id = ? AND action = 'BUY'
+                cur.execute('''
+                    SELECT price FROM virtual_trading_records
+                    WHERE id = %s AND action = 'BUY'
                 ''', (buy_record_id,))
-                
-                buy_result = cursor.fetchone()
+
+                buy_result = cur.fetchone()
                 if not buy_result:
                     self.logger.error(f"매수 기록을 찾을 수 없음: ID {buy_record_id}")
                     return False
-                
+
                 buy_price = buy_result[0]
-                
+
                 # 손익 계산
                 profit_loss = (price - buy_price) * quantity
                 profit_rate = ((price - buy_price) / buy_price) * 100
-                
-                cursor.execute('''
-                    INSERT INTO virtual_trading_records 
-                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason, 
+
+                cur.execute('''
+                    INSERT INTO virtual_trading_records
+                    (stock_code, stock_name, action, quantity, price, timestamp, strategy, reason,
                      is_test, profit_loss, profit_rate, buy_record_id, created_at)
-                    VALUES (?, ?, 'SELL', ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
-                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'), 
+                    VALUES (%s, %s, 'SELL', %s, %s, %s, %s, %s, TRUE, %s, %s, %s, %s)
+                ''', (stock_code, stock_name, quantity, price, timestamp.strftime('%Y-%m-%d %H:%M:%S'),
                       strategy, reason, profit_loss, profit_rate, buy_record_id, now_kst().strftime('%Y-%m-%d %H:%M:%S')))
-                
-                conn.commit()
-                
-                profit_sign = "+" if profit_loss >= 0 else ""
-                self.logger.info(f"📉 가상 매도 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - "
-                               f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {strategy}")
-                return True
-                
+
+            conn.commit()
+
+            profit_sign = "+" if profit_loss >= 0 else ""
+            self.logger.info(f"📉 가상 매도 기록 저장: {stock_code}({stock_name}) {quantity}주 @{price:,.0f}원 - "
+                           f"손익: {profit_sign}{profit_loss:,.0f}원 ({profit_rate:+.2f}%) - {strategy}")
+            return True
+
         except Exception as e:
             self.logger.error(f"가상 매도 기록 저장 실패: {e}")
+            if conn and not conn.closed:
+                conn.rollback()
             return False
-    
+        finally:
+            self._put_connection(conn)
+
     def get_virtual_open_positions(self) -> pd.DataFrame:
         """미체결 가상 포지션 조회 (매수만 하고 매도 안한 것들)"""
+        conn = None
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                query = '''
-                    SELECT 
-                        b.id,
-                        b.stock_code,
-                        b.stock_name,
-                        b.quantity,
-                        b.price as buy_price,
-                        b.timestamp as buy_time,
-                        b.strategy,
-                        b.reason as buy_reason
-                    FROM virtual_trading_records b
-                    WHERE b.action = 'BUY' 
-                        AND b.is_test = 1
-                        AND NOT EXISTS (
-                            SELECT 1 FROM virtual_trading_records s 
-                            WHERE s.buy_record_id = b.id AND s.action = 'SELL'
-                        )
-                    ORDER BY b.timestamp DESC
-                '''
-                
-                df = pd.read_sql_query(query, conn)
-                if not df.empty:
-                    df['buy_time'] = pd.to_datetime(df['buy_time'], format='ISO8601', utc=True)
-                
-                return df
-                
+            conn = self._get_connection()
+            query = '''
+                SELECT
+                    b.id,
+                    b.stock_code,
+                    b.stock_name,
+                    b.quantity,
+                    b.price as buy_price,
+                    b.timestamp as buy_time,
+                    b.strategy,
+                    b.reason as buy_reason
+                FROM virtual_trading_records b
+                WHERE b.action = 'BUY'
+                    AND b.is_test = TRUE
+                    AND NOT EXISTS (
+                        SELECT 1 FROM virtual_trading_records s
+                        WHERE s.buy_record_id = b.id AND s.action = 'SELL'
+                    )
+                ORDER BY b.timestamp DESC
+            '''
+
+            df = pd.read_sql_query(query, conn)
+            if not df.empty:
+                df['buy_time'] = pd.to_datetime(df['buy_time'], format='ISO8601', utc=True)
+
+            return df
+
         except Exception as e:
             self.logger.error(f"미체결 포지션 조회 실패: {e}")
             return pd.DataFrame()
-    
+        finally:
+            self._put_connection(conn)
+
     def get_virtual_trading_history(self, days: int = 30, include_open: bool = True) -> pd.DataFrame:
         """가상 매매 이력 조회"""
+        conn = None
         try:
             start_date = now_kst() - timedelta(days=days)
-            
-            with sqlite3.connect(self.db_path) as conn:
+
+            conn = self._get_connection()
+            if include_open:
+                query = '''
+                    SELECT
+                        id,
+                        stock_code,
+                        stock_name,
+                        action,
+                        quantity,
+                        price,
+                        timestamp,
+                        strategy,
+                        reason,
+                        profit_loss,
+                        profit_rate,
+                        buy_record_id
+                    FROM virtual_trading_records
+                    WHERE timestamp >= %s AND is_test = TRUE
+                    ORDER BY timestamp DESC
+                '''
+            else:
+                query = '''
+                    SELECT
+                        s.stock_code,
+                        s.stock_name,
+                        b.price as buy_price,
+                        b.timestamp as buy_time,
+                        b.reason as buy_reason,
+                        s.price as sell_price,
+                        s.timestamp as sell_time,
+                        s.reason as sell_reason,
+                        s.strategy,
+                        s.quantity,
+                        s.profit_loss,
+                        s.profit_rate
+                    FROM virtual_trading_records s
+                    JOIN virtual_trading_records b ON s.buy_record_id = b.id
+                    WHERE s.action = 'SELL'
+                        AND s.timestamp >= %s
+                        AND s.is_test = TRUE
+                    ORDER BY s.timestamp DESC
+                '''
+
+            df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
+
+            if not df.empty:
                 if include_open:
-                    # 모든 기록 (매수/매도)
-                    query = '''
-                        SELECT 
-                            id,
-                            stock_code,
-                            stock_name,
-                            action,
-                            quantity,
-                            price,
-                            timestamp,
-                            strategy,
-                            reason,
-                            profit_loss,
-                            profit_rate,
-                            buy_record_id
-                        FROM virtual_trading_records 
-                        WHERE timestamp >= ? AND is_test = 1
-                        ORDER BY timestamp DESC
-                    '''
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
                 else:
-                    # 완료된 거래만 (매수-매도 쌍)
-                    query = '''
-                        SELECT 
-                            s.stock_code,
-                            s.stock_name,
-                            b.price as buy_price,
-                            b.timestamp as buy_time,
-                            b.reason as buy_reason,
-                            s.price as sell_price,
-                            s.timestamp as sell_time,
-                            s.reason as sell_reason,
-                            s.strategy,
-                            s.quantity,
-                            s.profit_loss,
-                            s.profit_rate
-                        FROM virtual_trading_records s
-                        JOIN virtual_trading_records b ON s.buy_record_id = b.id
-                        WHERE s.action = 'SELL' 
-                            AND s.timestamp >= ? 
-                            AND s.is_test = 1
-                        ORDER BY s.timestamp DESC
-                    '''
-                
-                df = pd.read_sql_query(query, conn, params=(start_date.strftime('%Y-%m-%d %H:%M:%S'),))
-                
-                if not df.empty:
-                    if include_open:
-                        df['timestamp'] = pd.to_datetime(df['timestamp'])
-                    else:
-                        df['buy_time'] = pd.to_datetime(df['buy_time'])
-                        df['sell_time'] = pd.to_datetime(df['sell_time'])
-                
-                return df
-                
+                    df['buy_time'] = pd.to_datetime(df['buy_time'])
+                    df['sell_time'] = pd.to_datetime(df['sell_time'])
+
+            return df
+
         except Exception as e:
             self.logger.error(f"가상 매매 이력 조회 실패: {e}")
             return pd.DataFrame()
-    
+        finally:
+            self._put_connection(conn)
+
     def get_virtual_trading_stats(self, days: int = 30) -> Dict[str, Any]:
         """가상 매매 통계"""
         try:
             completed_trades = self.get_virtual_trading_history(days=days, include_open=False)
             open_positions = self.get_virtual_open_positions()
-            
+
             stats = {
                 'total_trades': len(completed_trades),
                 'open_positions': len(open_positions),
@@ -866,32 +977,29 @@ class DatabaseManager:
                 'max_loss': 0,
                 'strategies': {}
             }
-            
+
             if not completed_trades.empty:
-                # 승률 계산
                 winning_trades = completed_trades[completed_trades['profit_loss'] > 0]
                 stats['win_rate'] = len(winning_trades) / len(completed_trades) * 100
-                
-                # 손익 통계
+
                 stats['total_profit'] = completed_trades['profit_loss'].sum()
                 stats['avg_profit_rate'] = completed_trades['profit_rate'].mean()
                 stats['max_profit'] = completed_trades['profit_loss'].max()
                 stats['max_loss'] = completed_trades['profit_loss'].min()
-                
-                # 전략별 통계
+
                 for strategy in completed_trades['strategy'].unique():
                     strategy_trades = completed_trades[completed_trades['strategy'] == strategy]
                     strategy_wins = strategy_trades[strategy_trades['profit_loss'] > 0]
-                    
+
                     stats['strategies'][strategy] = {
                         'total_trades': len(strategy_trades),
                         'win_rate': len(strategy_wins) / len(strategy_trades) * 100 if len(strategy_trades) > 0 else 0,
                         'total_profit': strategy_trades['profit_loss'].sum(),
                         'avg_profit_rate': strategy_trades['profit_rate'].mean()
                     }
-            
+
             return stats
-            
+
         except Exception as e:
             self.logger.error(f"가상 매매 통계 조회 실패: {e}")
             return {}
