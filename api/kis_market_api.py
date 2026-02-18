@@ -286,7 +286,7 @@ def get_index_data(index_code: str = "0001") -> Optional[Dict[str, Any]]:
     }
 
     try:
-        logger.debug(f"📊 지수 정보 조회: {index_code}")
+        # logger.debug(f"📊 지수 정보 조회: {index_code}")
         res = kis._url_fetch(url, tr_id, "", params)
 
         if res and res.isOK():
@@ -297,10 +297,10 @@ def get_index_data(index_code: str = "0001") -> Optional[Dict[str, Any]]:
                 if isinstance(output_data, list) and len(output_data) > 0:
                     result = output_data[0]
                     if isinstance(result, dict):
-                        logger.debug(f"✅ {index_code} 지수 조회 성공")
+                        # logger.debug(f"✅ {index_code} 지수 조회 성공")
                         return result
                 elif isinstance(output_data, dict):
-                    logger.debug(f"✅ {index_code} 지수 조회 성공")
+                    # logger.debug(f"✅ {index_code} 지수 조회 성공")
                     return output_data
 
                 logger.warning(f"⚠️ {index_code} 지수 데이터 형식 오류")
@@ -338,7 +338,7 @@ def get_investor_flow_data() -> Optional[Dict[str, Any]]:
     }
 
     try:
-        logger.debug(f"💰 투자자별 매매 현황 조회: {current_date}")
+        # logger.debug(f"💰 투자자별 매매 현황 조회: {current_date}")
         res = kis._url_fetch(url, tr_id, "", params)
 
         if res and res.isOK():
@@ -362,7 +362,7 @@ def get_investor_flow_data() -> Optional[Dict[str, Any]]:
                 else:
                     result['stock_details'] = [output2_data]
 
-            logger.debug("✅ 투자자별 매매 현황 조회 성공")
+            # logger.debug("✅ 투자자별 매매 현황 조회 성공")
             return result
 
         else:
@@ -383,7 +383,7 @@ def get_market_overview() -> Optional[Dict[str, Any]]:
         Dict: 종합 시장 정보
     """
     try:
-        logger.debug("📊 종합 시장 개요 조회 시작")
+        # logger.debug("📊 종합 시장 개요 조회 시작")
 
         # 코스피 지수 조회
         kospi_data = get_index_data("0001")
@@ -401,7 +401,7 @@ def get_market_overview() -> Optional[Dict[str, Any]]:
             'timestamp': now_kst().isoformat()
         }
 
-        logger.debug("✅ 종합 시장 개요 조회 완료")
+        # logger.debug("✅ 종합 시장 개요 조회 완료")
         return result
 
     except Exception as e:
@@ -452,7 +452,7 @@ def get_stock_balance(output_dv: str = "01", tr_cont: str = "",
     }
 
     try:
-        logger.debug("💰 주식잔고조회 API 호출")
+        # logger.debug("💰 주식잔고조회 API 호출")
         res = kis._url_fetch(url, tr_id, tr_cont, params)
 
         if res and res.isOK():
@@ -489,13 +489,13 @@ def get_stock_balance(output_dv: str = "01", tr_cont: str = "",
                     'raw_summary': summary  # 원본 데이터 보관
                 }
 
-                logger.debug(f"✅ 계좌요약: 💰매수가능={account_summary['nxdy_excc_amt']:,}원, "
+                # logger.debug(f"✅ 계좌요약: 💰매수가능={account_summary['nxdy_excc_amt']:,}원, "
                            f"총평가액={account_summary['tot_evlu_amt']:,}원, "
                            f"평가손익={account_summary['evlu_pfls_smtl_amt']:+,}원")
 
             if output1_data:
                 balance_df = pd.DataFrame(output1_data)
-                logger.debug(f"✅ 주식잔고조회 성공: {len(balance_df)}개 종목")
+                # logger.debug(f"✅ 주식잔고조회 성공: {len(balance_df)}개 종목")
                 return balance_df, account_summary
             else:
                 logger.info("📊 보유 종목 없음")
@@ -598,7 +598,7 @@ def get_account_balance() -> Optional[Dict]:
             'inquiry_time': now_kst().strftime('%Y-%m-%d %H:%M:%S')
         })
 
-        logger.debug(f"💰 계좌요약: {len(stocks)}개 종목, 총 {total_value:,}원, "
+        # logger.debug(f"💰 계좌요약: {len(stocks)}개 종목, 총 {total_value:,}원, "
                    f"손익 {total_profit_loss:+,}원 ({base_info['total_profit_loss_rate']:+.2f}%), "
                    f"💰매수가능={base_info['available_amount']:,}원")
 
@@ -700,7 +700,7 @@ def get_stock_market_cap(stock_code: str) -> Optional[Dict[str, Any]]:
             'query_time': now_kst().strftime('%Y-%m-%d %H:%M:%S')
         }
         
-        logger.debug(f"✅ {stock_code}({stock_name}) 시가총액: {market_cap_billion:,.0f}억원 "
+        # logger.debug(f"✅ {stock_code}({stock_name}) 시가총액: {market_cap_billion:,.0f}억원 "
                    f"(현재가 {current_price:,}원)")
         
         return result

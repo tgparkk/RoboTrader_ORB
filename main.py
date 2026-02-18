@@ -129,7 +129,7 @@ class DayTradingBot:
             
             # 로깅으로 가격 조정 확인
             if abs(rounded_price - original_price) > 0:
-                self.logger.debug(f"💰 호가단위 조정: {original_price:,.0f}원 → {rounded_price:,.0f}원")
+                # self.logger.debug(f"💰 호가단위 조정: {original_price:,.0f}원 → {rounded_price:,.0f}원")
             
             return float(rounded_price)
             
@@ -340,7 +340,7 @@ class DayTradingBot:
                     virtual_balance = virtual_manager.get_virtual_balance()
                     # 실계좌 동기화 로직 제거됨 (초기화 시 1000만원 설정값 유지)
                     self.fund_manager.update_total_funds(virtual_balance)
-                    self.logger.debug(f"💰 가상거래 잔고: {virtual_balance:,.0f}원")
+                    # self.logger.debug(f"💰 가상거래 잔고: {virtual_balance:,.0f}원")
                 else:
                     # 실거래 모드: 실시간 잔고 조회
                     balance_info = self.api_manager.get_account_balance()
@@ -352,7 +352,7 @@ class DayTradingBot:
                 current_available_funds = fund_status['available_funds']
                 max_investment_per_stock = fund_status['total_funds'] * 0.1  # 종목당 최대 10%
 
-                self.logger.debug(f"💰 현재 자금 상황: 가용={current_available_funds:,.0f}원, 종목당최대={max_investment_per_stock:,.0f}원")
+                # self.logger.debug(f"💰 현재 자금 상황: 가용={current_available_funds:,.0f}원, 종목당최대={max_investment_per_stock:,.0f}원")
 
                 await self._execute_trading_decision(current_available_funds)
                 await asyncio.sleep(5)  # 5초 주기
@@ -403,7 +403,7 @@ class DayTradingBot:
 
             # 실제 거래 모드: 실제 포지션만 매도 판단
             if positioned_stocks:
-                self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
+                # self.logger.debug(f"💰 매도 판단 대상 {len(positioned_stocks)}개 종목: {[f'{s.stock_code}({s.stock_name})' for s in positioned_stocks]}")
                 for trading_stock in positioned_stocks:
                     # 실제 포지션인지 확인
                     if trading_stock.position and trading_stock.position.quantity > 0:
@@ -411,7 +411,7 @@ class DayTradingBot:
                     else:
                         self.logger.warning(f"⚠️ {trading_stock.stock_code} 포지션 정보 없음 (매도 판단 건너뜀)")
             else:
-                self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
+                # self.logger.debug("📊 매도 판단 대상 종목 없음 (POSITIONED 상태 종목 없음)")
 
         except Exception as e:
             self.logger.error(f"❌ 매매 판단 시스템 오류: {e}")
@@ -427,7 +427,7 @@ class DayTradingBot:
             stock_code = trading_stock.stock_code
             stock_name = trading_stock.stock_name
 
-            self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
+            # self.logger.debug(f"🔍 매수 판단 시작: {stock_code}({stock_name})")
 
             # 추가 안전 검증: 현재 보유 중인 종목인지 다시 한번 확인
             positioned_stocks = self.trading_manager.get_stocks_by_state(StockState.POSITIONED)
@@ -447,12 +447,12 @@ class DayTradingBot:
             # 🆕 25분 매수 쿨다운 확인
             if trading_stock.is_buy_cooldown_active():
                 remaining_minutes = trading_stock.get_remaining_cooldown_minutes()
-                self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
+                # self.logger.debug(f"⚠️ {stock_code}: 매수 쿨다운 활성화 (남은 시간: {remaining_minutes}분)")
                 return
 
             # 🆕 당일 재진입 제한 확인 (1회만 허용)
             if not trading_stock.can_buy_today():
-                self.logger.debug(f"⚠️ {stock_code}: 당일 재진입 제한 (매수 {trading_stock.daily_buy_count}회 완료)")
+                # self.logger.debug(f"⚠️ {stock_code}: 당일 재진입 제한 (매수 {trading_stock.daily_buy_count}회 완료)")
                 return
 
             # 🆕 [지영] 일일 손실 한도 체크 — 한도 도달 시 신규 매수 차단
@@ -471,10 +471,10 @@ class DayTradingBot:
             # 분봉 데이터 가져오기
             combined_data = self.intraday_manager.get_combined_chart_data(stock_code)
             if combined_data is None:
-                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
+                # self.logger.debug(f"❌ {stock_code} 1분봉 데이터 없음 (None)")
                 return
             if len(combined_data) < 15:
-                self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요) - 실시간 데이터 대기 중")
+                # self.logger.debug(f"❌ {stock_code} 1분봉 데이터 부족: {len(combined_data)}개 (최소 15개 필요) - 실시간 데이터 대기 중")
                 # 실시간 환경에서는 메모리에 있는 데이터만 사용 (캐시 파일 체크 불필요)
                 return
             
@@ -484,7 +484,7 @@ class DayTradingBot:
             data_3min = TimeFrameConverter.convert_to_3min_data(combined_data)
 
             if data_3min is None or len(data_3min) < 5:
-                self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
+                # self.logger.debug(f"❌ {stock_code} 3분봉 데이터 부족: {len(data_3min) if data_3min is not None else 0}개 (최소 5개 필요)")
                 return
 
             # 🆕 3분봉 품질 검증: 경고만 표시 (시뮬레이션과 동일하게 차단하지 않음)
@@ -522,9 +522,9 @@ class DayTradingBot:
             # 매매 판단 엔진으로 매수 신호 확인 (완성된 3분봉 데이터 사용)
             buy_signal, buy_reason, buy_info = await self.decision_engine.analyze_buy_decision(trading_stock, data_3min)
 
-            self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
+            # self.logger.debug(f"💡 {stock_code} 매수 판단 결과: signal={buy_signal}, reason='{buy_reason}'")
             if buy_signal and buy_info:
-                self.logger.debug(f"💰 {stock_code} 매수 정보: 가격={buy_info['buy_price']:,.0f}원, 수량={buy_info['quantity']:,}주, 투자금={buy_info['max_buy_amount']:,.0f}원")
+                # self.logger.debug(f"💰 {stock_code} 매수 정보: 가격={buy_info['buy_price']:,.0f}원, 수량={buy_info['quantity']:,}주, 투자금={buy_info['max_buy_amount']:,.0f}원")
 
 
             if buy_signal and buy_info.get('quantity', 0) > 0:
@@ -559,7 +559,7 @@ class DayTradingBot:
                 # 🆕 매수 전 종목 상태 확인
                 current_stock = self.trading_manager.get_trading_stock(stock_code)
                 if current_stock:
-                    self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
+                    # self.logger.debug(f"🔍 매수 전 상태 확인: {stock_code} 현재상태={current_stock.state.value}")
                 
                 # 가상거래 모드 확인
                 use_virtual_trading = self.config.risk_management.use_virtual_trading if hasattr(self.config.risk_management, 'use_virtual_trading') else False
@@ -663,12 +663,12 @@ class DayTradingBot:
 
             current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
             if current_price_info is None:
-                self.logger.debug(f"📊 매도 판단 스킵: {stock_code}({stock_name}) 현재가 없음 (캐시 미갱신 또는 미수집)")
+                # self.logger.debug(f"📊 매도 판단 스킵: {stock_code}({stock_name}) 현재가 없음 (캐시 미갱신 또는 미수집)")
                 return
 
             current_price = current_price_info.get('current_price') or 0.0
             if current_price <= 0:
-                self.logger.debug(f"📊 매도 판단 스킵: {stock_code}({stock_name}) 현재가 유효하지 않음 ({current_price})")
+                # self.logger.debug(f"📊 매도 판단 스킵: {stock_code}({stock_name}) 현재가 유효하지 않음 ({current_price})")
                 return
 
             data = pd.DataFrame({'close': [float(current_price)]})
@@ -677,9 +677,9 @@ class DayTradingBot:
             
             if sell_signal:
                 # 🆕 매도 전 종목 상태 확인
-                self.logger.debug(f"🔍 매도 전 상태 확인: {stock_code} 현재상태={trading_stock.state.value}")
+                # self.logger.debug(f"🔍 매도 전 상태 확인: {stock_code} 현재상태={trading_stock.state.value}")
                 if trading_stock.position:
-                    self.logger.debug(f"🔍 포지션 정보: {trading_stock.position.quantity}주 @{trading_stock.position.avg_price:,.0f}원")
+                    # self.logger.debug(f"🔍 포지션 정보: {trading_stock.position.quantity}주 @{trading_stock.position.avg_price:,.0f}원")
                 
                 # 매도 후보로 변경
                 success = self.trading_manager.move_to_sell_candidate(stock_code, sell_reason)
@@ -1099,7 +1099,7 @@ class DayTradingBot:
                             else:
                                 prev_close = float(daily_data.iloc[-1]['stck_clpr'])
                 except Exception as e:
-                    self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
+                    # self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
                 
                 # 거래 상태 관리자에 추가
                 success = await self.trading_manager.add_selected_stock(
@@ -1182,7 +1182,7 @@ class DayTradingBot:
                                 else:
                                     prev_close = float(daily_data.iloc[-1]['stck_clpr'])
                     except Exception as e:
-                        self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
+                        # self.logger.debug(f"⚠️ {stock_code} 전날 종가 조회 실패: {e}")
 
                     # 거래 상태 관리자에 추가
                     success = await self.trading_manager.add_selected_stock(
@@ -1337,7 +1337,7 @@ class DayTradingBot:
             is_3min_candle_completed = (minute_in_3min_cycle == 0 and current_second >= 10)
 
             if not is_3min_candle_completed:
-                self.logger.debug(f"⏱️ 3분봉 미완성 또는 10초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
+                # self.logger.debug(f"⏱️ 3분봉 미완성 또는 10초 미경과: {current_time.strftime('%H:%M:%S')} - 매수 판단 건너뜀")
                 return
 
             # 🆕 데이터 업데이트 직후 매수 판단 실행 (3분봉 완성 + 10초 후)
