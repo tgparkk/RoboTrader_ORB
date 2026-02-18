@@ -44,7 +44,22 @@ class ORBStrategy(TradingStrategy):
     def __init__(self, config: ORBStrategyConfig = None, logger: Any = None, pg_manager=None):
         super().__init__(config or DEFAULT_ORB_CONFIG, logger)
         self.orb_data = {}  # {code: {'high': float, 'low': float, 'avg_volume': float, ...}}
+        self._orb_data_date = None  # 날짜 변경 감지용
         self.pg = pg_manager
+
+    def _ensure_daily_reset(self):
+        """매일 장 시작 시 orb_data 초기화 (전날 데이터 사용 방지)"""
+        from utils.korean_time import now_kst
+        today = now_kst().date()
+        if self._orb_data_date != today:
+            if self._orb_data_date is not None and self.orb_data:
+                if self.logger:
+                    self.logger.info(
+                        f"[ORB 전략] 🔄 날짜 변경 감지 ({self._orb_data_date} → {today}), "
+                        f"orb_data 초기화 ({len(self.orb_data)}개 종목 제거)"
+                    )
+            self.orb_data = {}
+            self._orb_data_date = today
 
     async def select_daily_candidates(
         self,
@@ -514,6 +529,9 @@ class ORBStrategy(TradingStrategy):
             매수 신호 또는 None
         """
         try:
+            # 0. 날짜 변경 시 orb_data 초기화
+            self._ensure_daily_reset()
+
             # 1. 시간 확인
             now = datetime.now().time()
             buy_start = time.fromisoformat(self.config.buy_time_start)
@@ -770,6 +788,8 @@ class ORBStrategy(TradingStrategy):
             계산 성공 여부
         """
         try:
+            # 날짜 변경 시 orb_data 초기화 (전날 데이터 사용 방지)
+            self._ensure_daily_reset()
             # DataFrame 변환
             if hasattr(minute_1_data, 'empty'):
                 df = minute_1_data
