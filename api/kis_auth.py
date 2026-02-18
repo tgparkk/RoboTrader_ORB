@@ -186,7 +186,7 @@ def auth(svr: str = 'prod', product: str = '01') -> bool:
             return False
     else:
         my_token = saved_token
-        # logger.debug('✅ 기존 토큰 사용')
+        logger.debug('✅ 기존 토큰 사용')
 
     # 환경 설정
     changeTREnv(f"Bearer {my_token}", svr, product)
@@ -328,7 +328,7 @@ def _url_fetch(api_url: str, ptr_id: str, tr_cont: str, params: Dict,
                 headers.update(appendHeaders)
 
             if _DEBUG:
-                # logger.debug(f"API 호출 ({attempt + 1}/{_max_retries + 1}): {url}, TR: {tr_id}")
+                logger.debug(f"API 호출 ({attempt + 1}/{_max_retries + 1}): {url}, TR: {tr_id}")
 
             # API 호출
             if postFlag:
@@ -343,7 +343,7 @@ def _url_fetch(api_url: str, ptr_id: str, tr_cont: str, params: Dict,
                 ar = APIResp(res)
                 if ar.isOK():
                     if _DEBUG:
-                        # logger.debug(f"API 응답 성공: {tr_id}")
+                        logger.debug(f"API 응답 성공: {tr_id}")
                     return ar
                 else:
                     # API 응답은 200이지만 비즈니스 오류
@@ -464,7 +464,7 @@ def _wait_for_api_limit():
         if elapsed < _min_api_interval:
             wait_time = _min_api_interval - elapsed
             if _DEBUG:
-                # logger.debug(f"API 속도 제한: {wait_time:.3f}초 대기 (이전 호출로부터 {elapsed:.3f}초 경과)")
+                logger.debug(f"API 속도 제한: {wait_time:.3f}초 대기 (이전 호출로부터 {elapsed:.3f}초 경과)")
             time.sleep(wait_time)
 
     _last_api_call_time = now_kst().timestamp()

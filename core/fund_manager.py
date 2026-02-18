@@ -52,8 +52,8 @@ class FundManager:
             # 가용 자금 재계산
             self.available_funds = new_total - self.reserved_funds - self.invested_funds
             
-            # self.logger.info(f"💰 총 자금 업데이트: {old_total:,.0f}원 → {new_total:,.0f}원")
-            # self.logger.info(f"💰 가용 자금: {self.available_funds:,.0f}원")
+            self.logger.info(f"💰 총 자금 업데이트: {old_total:,.0f}원 → {new_total:,.0f}원")
+            self.logger.info(f"💰 가용 자금: {self.available_funds:,.0f}원")
     
     def get_max_buy_amount(self, stock_code: str) -> float:
         """
@@ -80,7 +80,7 @@ class FundManager:
             max_amount = min(max_per_stock, remaining_investment_capacity, available_limit)
             max_amount = max(0, max_amount)  # 음수 방지
             
-            # self.logger.debug(f"💰 {stock_code} 최대 매수 가능: {max_amount:,.0f}원 "
+            self.logger.debug(f"💰 {stock_code} 최대 매수 가능: {max_amount:,.0f}원 "
                             f"(종목한도: {max_per_stock:,.0f}, 투자여력: {remaining_investment_capacity:,.0f}, "
                             f"가용자금: {available_limit:,.0f})")
             
