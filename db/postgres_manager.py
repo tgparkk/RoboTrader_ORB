@@ -44,6 +44,28 @@ class PostgresManager:
             self._conn.close()
 
     # ============================================================
+    # 범용 쿼리 실행
+    # ============================================================
+
+    def execute_query(self, query: str, params=None) -> list:
+        """SQL 쿼리를 실행하고 결과(fetchall)를 반환한다."""
+        try:
+            conn = self._get_conn()
+            cur = conn.cursor()
+            cur.execute(query, params)
+            if cur.description:
+                results = cur.fetchall()
+            else:
+                results = []
+            conn.commit()
+            return results
+        except Exception as e:
+            self.logger.error(f"execute_query 실패: {e}")
+            if self._conn and not self._conn.closed:
+                self._conn.rollback()
+            raise
+
+    # ============================================================
     # 분봉 데이터 (minute_candles)
     # ============================================================
 

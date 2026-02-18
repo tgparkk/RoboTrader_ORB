@@ -341,17 +341,17 @@ class TradingDecisionEngine:
                 self.logger.error(f"❌ 가상 매도 실패: DB 매니저 없음")
                 return False
 
-            import sqlite3
             from utils.korean_time import now_kst
             today = now_kst().strftime('%Y-%m-%d')
 
-            with sqlite3.connect(self.db_manager.db_path) as conn:
+            conn = self.db_manager._get_connection()
+            try:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT id, price, quantity
                     FROM virtual_trading_records
-                    WHERE stock_code = ? AND action = 'BUY'
-                    AND date(timestamp) = ?
+                    WHERE stock_code = %s AND action = 'BUY'
+                    AND timestamp::date = %s::date
                     AND id NOT IN (
                         SELECT buy_record_id FROM virtual_trading_records
                         WHERE action = 'SELL' AND buy_record_id IS NOT NULL
@@ -361,6 +361,8 @@ class TradingDecisionEngine:
                 ''', (trading_stock.stock_code, today))
 
                 buy_record = cursor.fetchone()
+            finally:
+                self.db_manager._put_connection(conn)
 
             if not buy_record:
                 self.logger.warning(f"⚠️ 가상 매도 실패: 당일 매수 기록 없음 ({trading_stock.stock_code})")

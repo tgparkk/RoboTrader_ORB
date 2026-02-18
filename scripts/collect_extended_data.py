@@ -94,16 +94,18 @@ class ExtendedDataCollector:
             start_date = now_kst() - timedelta(days=self.days_to_track)
             
             # DB 연결 및 쿼리
-            import sqlite3
-            with sqlite3.connect(self.db_manager.db_path) as conn:
+            conn = self.db_manager._get_connection()
+            try:
                 cursor = conn.cursor()
                 cursor.execute('''
                     SELECT DISTINCT stock_code, stock_name 
                     FROM candidate_stocks 
-                    WHERE selection_date >= ?
+                    WHERE selection_date >= %s
                 ''', (start_date.strftime('%Y-%m-%d %H:%M:%S'),))
                 
                 rows = cursor.fetchall()
+            finally:
+                self.db_manager._put_connection(conn)
                 
             return {row[0]: row[1] for row in rows}
 
