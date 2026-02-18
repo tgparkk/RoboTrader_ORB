@@ -718,37 +718,41 @@ class ORBStrategy(TradingStrategy):
                 breakeven_time = time.fromisoformat(getattr(self.config, 'breakeven_time', '13:00'))
                 tighten_time = time.fromisoformat(getattr(self.config, 'tighten_time', '14:00'))
 
-                # 14:00 이후: 익절선을 현재 수익의 50%로 좁힘
+                # breakeven 평가를 tighten보다 먼저 실행 (우선순위 보장)
+                breakeven_str = getattr(self.config, 'breakeven_time', '13:00')
+                tighten_str = getattr(self.config, 'tighten_time', '14:00')
+
+                # breakeven_time 이후: 본전 이하이면 즉시 청산
+                if now >= breakeven_time and profit_pct <= 0:
+                    if self.logger:
+                        self.logger.info(
+                            f"[ORB 전략] ⏰ 시간 트레일링: {code} {breakeven_str} 본전 스탑 "
+                            f"@ {current_price:,.0f}원 (수익: {profit_pct:.2f}%)"
+                        )
+                    return SellSignal(
+                        code=code,
+                        reason=f"{breakeven_str} 본전 스탑 (수익 {profit_pct:.2f}%)",
+                        signal_type="time_trailing",
+                        confidence=0.9,
+                        metadata={'profit_pct': profit_pct, 'trailing_type': 'breakeven'}
+                    )
+
+                # tighten_time 이후: 익절선을 현재 수익의 50%로 좁힘
                 if now >= tighten_time and profit_pct > 0:
                     tighten_price = entry_price * (1 + profit_pct / 100 * 0.5)
                     if current_price <= tighten_price or profit_pct < 0.3:
                         if self.logger:
                             self.logger.info(
-                                f"[ORB 전략] ⏰ 시간 트레일링: {code} 14시 익절선 축소 청산 "
+                                f"[ORB 전략] ⏰ 시간 트레일링: {code} {tighten_str} 익절선 축소 청산 "
                                 f"@ {current_price:,.0f}원 (수익: {profit_pct:.2f}%)"
                             )
                         return SellSignal(
                             code=code,
-                            reason=f"14시 익절선 축소 (수익 {profit_pct:.2f}%)",
+                            reason=f"{tighten_str} 익절선 축소 (수익 {profit_pct:.2f}%)",
                             signal_type="time_trailing",
                             confidence=0.9,
                             metadata={'profit_pct': profit_pct, 'trailing_type': 'tighten'}
                         )
-
-                # 13:00 이후: 본전 이하이면 즉시 청산
-                if now >= breakeven_time and profit_pct <= 0:
-                    if self.logger:
-                        self.logger.info(
-                            f"[ORB 전략] ⏰ 시간 트레일링: {code} 13시 본전 스탑 "
-                            f"@ {current_price:,.0f}원 (수익: {profit_pct:.2f}%)"
-                        )
-                    return SellSignal(
-                        code=code,
-                        reason=f"13시 본전 스탑 (수익 {profit_pct:.2f}%)",
-                        signal_type="time_trailing",
-                        confidence=0.9,
-                        metadata={'profit_pct': profit_pct, 'trailing_type': 'breakeven'}
-                    )
 
                 # 11:00 이후: 수익 +1% 이상이면 +0.5% 트레일링 스탑
                 if now >= trailing_start and profit_pct >= 1.0:
