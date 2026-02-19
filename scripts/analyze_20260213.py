@@ -5,12 +5,12 @@ import sys
 import os
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import sqlite3
+import psycopg2
 from datetime import datetime
 
-# SQLite DB 연결
-db_path = "data/robotrader.db"
-conn = sqlite3.connect(db_path)
+# PostgreSQL 접속
+DB_CONN_PARAMS = dict(host='172.23.208.1', port=5433, dbname='robotrader_orb', user='postgres')
+conn = psycopg2.connect(**DB_CONN_PARAMS)
 cursor = conn.cursor()
 
 print("=" * 80)
@@ -25,9 +25,9 @@ print(f"\n1️⃣ 후보 종목 선정: {candidate_count}개")
 # 2. 가상 거래 기록
 cursor.execute("""
     SELECT stock_code, stock_name, action, quantity, price,
-           datetime(timestamp, 'localtime') as local_time
+           (timestamp AT TIME ZONE 'Asia/Seoul')::text as local_time
     FROM virtual_trading_records
-    WHERE DATE(timestamp, 'localtime') = '2026-02-13'
+    WHERE DATE(timestamp AT TIME ZONE 'Asia/Seoul') = '2026-02-13'
     ORDER BY timestamp
 """)
 trades = cursor.fetchall()
@@ -56,7 +56,6 @@ win_count = 0
 loss_count = 0
 
 for sell_code, sell_name, sell_qty, sell_price, sell_time in sell_trades:
-    # 해당 종목의 매수 기록 찾기
     for buy_code, buy_name, buy_qty, buy_price, buy_time in buy_trades:
         if buy_code == sell_code:
             profit = (sell_price - buy_price) * sell_qty

@@ -418,41 +418,46 @@ class TelegramIntegration:
                 if hasattr(strategy, 'orb_data'):
                     summary['orb_valid_count'] = len(strategy.orb_data)
 
-            # SQLite에서 당일 거래 기록 통계 조회
+            # PostgreSQL에서 당일 거래 기록 통계 조회
             if hasattr(bot, 'db_manager') and bot.db_manager:
+                conn = None
                 try:
-                    import sqlite3
-                    with sqlite3.connect(bot.db_manager.db_path) as conn:
-                        cursor = conn.cursor()
-                        # 당일 매수 건수
-                        cursor.execute(
-                            "SELECT COUNT(*) FROM virtual_trading_records WHERE action='BUY' AND DATE(timestamp)=?",
-                            (f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}",)
-                        )
-                        summary['total_buy_count'] = cursor.fetchone()[0]
+                    conn = bot.db_manager.get_connection()
+                    cursor = conn.cursor()
+                    date_str = f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}"
+                    # 당일 매수 건수
+                    cursor.execute(
+                        "SELECT COUNT(*) FROM virtual_trading_records WHERE action='BUY' AND DATE(timestamp)=%s",
+                        (date_str,)
+                    )
+                    summary['total_buy_count'] = cursor.fetchone()[0]
 
-                        # 당일 매도 건수 및 손익
-                        cursor.execute(
-                            """SELECT COUNT(*),
-                                      COALESCE(SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END), 0),
-                                      COALESCE(SUM(CASE WHEN profit_loss <= 0 THEN 1 ELSE 0 END), 0),
-                                      COALESCE(SUM(profit_loss), 0)
-                               FROM virtual_trading_records
-                               WHERE action='SELL' AND DATE(timestamp)=?""",
-                            (f"{today_str[:4]}-{today_str[4:6]}-{today_str[6:8]}",)
-                        )
-                        row = cursor.fetchone()
-                        summary['total_sell_count'] = row[0]
-                        summary['win_count'] = row[1]
-                        summary['loss_count'] = row[2]
-                        summary['realized_pnl'] = row[3]
+                    # 당일 매도 건수 및 손익
+                    cursor.execute(
+                        """SELECT COUNT(*),
+                                  COALESCE(SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END), 0),
+                                  COALESCE(SUM(CASE WHEN profit_loss <= 0 THEN 1 ELSE 0 END), 0),
+                                  COALESCE(SUM(profit_loss), 0)
+                           FROM virtual_trading_records
+                           WHERE action='SELL' AND DATE(timestamp)=%s""",
+                        (date_str,)
+                    )
+                    row = cursor.fetchone()
+                    summary['total_sell_count'] = row[0]
+                    summary['win_count'] = row[1]
+                    summary['loss_count'] = row[2]
+                    summary['realized_pnl'] = row[3]
 
-                        if summary['total_sell_count'] > 0:
-                            summary['win_rate'] = round(
-                                summary['win_count'] / summary['total_sell_count'] * 100, 2
-                            )
+                    if summary['total_sell_count'] > 0:
+                        summary['win_rate'] = round(
+                            summary['win_count'] / summary['total_sell_count'] * 100, 2
+                        )
+                    cursor.close()
                 except Exception as db_e:
-                    self.logger.warning(f"⚠️ SQLite 거래 통계 조회 실패: {db_e}")
+                    self.logger.warning(f"⚠️ PG 거래 통계 조회 실패: {db_e}")
+                finally:
+                    if conn:
+                        bot.db_manager._put_connection(conn)
 
             # 가상 잔고 정보
             if use_virtual and hasattr(bot, 'decision_engine') and hasattr(bot.decision_engine, 'virtual_trading'):

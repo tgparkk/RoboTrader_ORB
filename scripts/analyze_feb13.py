@@ -1,7 +1,7 @@
-import sqlite3
+import psycopg2
 
-db_path = "data/robotrader.db"
-conn = sqlite3.connect(db_path)
+DB_CONN_PARAMS = dict(host='172.23.208.1', port=5433, dbname='robotrader_orb', user='postgres')
+conn = psycopg2.connect(**DB_CONN_PARAMS)
 cursor = conn.cursor()
 
 print("="*80)
@@ -28,10 +28,10 @@ if candidate_count > 0:
 # All Trades
 cursor.execute("""
     SELECT stock_code, stock_name, action, quantity, price,
-           datetime(timestamp, 'localtime') as local_time,
+           (timestamp AT TIME ZONE 'Asia/Seoul')::text as local_time,
            profit_loss, profit_rate
     FROM virtual_trading_records
-    WHERE DATE(timestamp, 'localtime') = '2026-02-13'
+    WHERE DATE(timestamp AT TIME ZONE 'Asia/Seoul') = '2026-02-13'
     ORDER BY timestamp
 """)
 trades = cursor.fetchall()
@@ -62,7 +62,7 @@ for trade in trades:
 cursor.execute("""
     SELECT COUNT(*), SUM(profit_loss), AVG(profit_loss), AVG(profit_rate)
     FROM virtual_trading_records
-    WHERE DATE(timestamp, 'localtime') = '2026-02-13'
+    WHERE DATE(timestamp AT TIME ZONE 'Asia/Seoul') = '2026-02-13'
       AND action = 'SELL'
       AND profit_loss IS NOT NULL
 """)
@@ -71,7 +71,7 @@ sell_stats = cursor.fetchone()
 cursor.execute("""
     SELECT COUNT(*)
     FROM virtual_trading_records
-    WHERE DATE(timestamp, 'localtime') = '2026-02-13'
+    WHERE DATE(timestamp AT TIME ZONE 'Asia/Seoul') = '2026-02-13'
       AND action = 'SELL'
       AND profit_loss > 0
 """)
@@ -80,7 +80,7 @@ win_count = cursor.fetchone()[0]
 cursor.execute("""
     SELECT COUNT(*)
     FROM virtual_trading_records
-    WHERE DATE(timestamp, 'localtime') = '2026-02-13'
+    WHERE DATE(timestamp AT TIME ZONE 'Asia/Seoul') = '2026-02-13'
       AND action = 'SELL'
       AND profit_loss < 0
 """)

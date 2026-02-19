@@ -1,15 +1,15 @@
 """
 2025년 1월 22일 매매 분석 스크립트
 """
-import sqlite3
+import psycopg2
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 import re
 from collections import defaultdict
 
-# 데이터베이스 경로
-DB_PATH = "data/robotrader.db"
+# PostgreSQL 접속 정보
+DB_CONN_PARAMS = dict(host='172.23.208.1', port=5433, dbname='robotrader_orb', user='postgres')
 LOG_PATH = "logs/trading_20260122.log"
 TARGET_DATE = "2026-01-22"
 
@@ -20,7 +20,7 @@ def analyze_database_trades():
     print("=" * 80)
     
     try:
-        conn = sqlite3.connect(DB_PATH)
+        conn = psycopg2.connect(**DB_CONN_PARAMS)
         
         # 실거래 기록 조회 (날짜 필터링)
         query_real = f"""
