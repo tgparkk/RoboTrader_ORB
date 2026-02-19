@@ -742,7 +742,7 @@ class IntradayStockManager:
                 #self.logger.warning(f"⚠️ {stock_code} 당일 외 데이터 {removed}건 제거: {before_filter_count} → {len(combined_data)}건")
 
             if combined_data.empty:
-                self.logger.error(f"❌ {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
+                self.logger.debug(f"❌ {stock_code} 당일 데이터 없음 (전일 데이터만 존재)")
                 return None
 
             # 중복 제거 (같은 시간대 데이터가 있을 수 있음)
