@@ -185,7 +185,7 @@ class IntradayStockManager:
             is_early_selection = (current_time.hour == open_hour and current_time.minute < open_minute + 5)
 
             if not success and is_early_selection:
-                self.logger.warning(f"⚠️ {stock_code} 시장 시작 5분 이내 데이터 부족, batch_update에서 재시도 필요")
+                self.logger.debug(f"📊 {stock_code} 시장 시작 5분 이내 데이터 부족, batch_update에서 재시도 예정")
                 # data_complete = False로 설정하여 나중에 재시도
                 with self._lock:
                     if stock_code in self.selected_stocks:
@@ -258,7 +258,7 @@ class IntradayStockManager:
                             )
 
                 # 기본 데이터가 부족하면 전체 재수집
-                self.logger.warning(f"⚠️ {stock_code} 기본 데이터 부족, 전체 재수집 시도")
+                self.logger.debug(f"📊 {stock_code} 기본 데이터 부족, 전체 재수집 시도")
                 return await self.historical_collector.collect_historical_data(stock_code)
 
             # 3. 최신 분봉 1개만 수집 (🔥 전날 데이터 필터링 포함)
@@ -269,7 +269,7 @@ class IntradayStockManager:
                 # 장초반 구간에서 실시간 업데이트 실패 시 전체 재수집 시도
                 current_hour = current_time.strftime("%H%M")
                 if current_hour <= "0915":  # 09:15 이전까지 확장
-                    self.logger.warning(f"⚠️ {stock_code} 장초반 실시간 업데이트 실패, 전체 재수집 시도")
+                    self.logger.debug(f"📊 {stock_code} 장초반 실시간 업데이트 실패, 전체 재수집 시도")
                     return await self.historical_collector.collect_historical_data(stock_code)
                 else:
                     # 장초반이 아니면 최신 데이터 수집 실패 - 기존 데이터 유지
@@ -289,12 +289,12 @@ class IntradayStockManager:
 
                 if before_validation_count != len(latest_minute_data):
                     removed = before_validation_count - len(latest_minute_data)
-                    self.logger.error(
-                        f"🚨 {stock_code} 병합 전 2차 검증에서 전날 데이터 {removed}건 추가 발견 및 제거!"
+                    self.logger.debug(
+                        f"📊 {stock_code} 병합 전 2차 검증에서 전날 데이터 {removed}건 제거"
                     )
 
                 if latest_minute_data.empty:
-                    self.logger.error(f"❌ {stock_code} 2차 검증 실패 - 전날 데이터만 존재")
+                    self.logger.warning(f"⚠️ {stock_code} 2차 검증 실패 - 전날 데이터만 존재")
                     return False
 
             elif 'datetime' in latest_minute_data.columns:
@@ -310,12 +310,12 @@ class IntradayStockManager:
 
                 if before_validation_count != len(latest_minute_data):
                     removed = before_validation_count - len(latest_minute_data)
-                    self.logger.error(
-                        f"🚨 {stock_code} 병합 전 2차 검증에서 전날 데이터 {removed}건 추가 발견 및 제거!"
+                    self.logger.debug(
+                        f"📊 {stock_code} 병합 전 2차 검증에서 전날 데이터 {removed}건 제거"
                     )
 
                 if latest_minute_data.empty:
-                    self.logger.error(f"❌ {stock_code} 2차 검증 실패 - 전날 데이터만 존재")
+                    self.logger.warning(f"⚠️ {stock_code} 2차 검증 실패 - 전날 데이터만 존재")
                     return False
 
             # 4. 기존 realtime_data에 최신 데이터 추가/업데이트
@@ -378,12 +378,12 @@ class IntradayStockManager:
 
                     if before_final_count != len(updated_realtime):
                         removed = before_final_count - len(updated_realtime)
-                        self.logger.error(
-                            f"🚨 {stock_code} 저장 전 3차 검증에서 전날 데이터 {removed}건 최종 제거!"
+                        self.logger.debug(
+                            f"📊 {stock_code} 저장 전 3차 검증에서 전날 데이터 {removed}건 제거"
                         )
 
                     if updated_realtime.empty:
-                        self.logger.error(f"❌ {stock_code} 3차 검증 실패 - realtime_data가 비었음")
+                        self.logger.warning(f"⚠️ {stock_code} 3차 검증 실패 - realtime_data가 비었음")
                         return False
 
                     # 최종 저장
@@ -552,14 +552,14 @@ class IntradayStockManager:
 
                 if before_filter_count != len(chart_df):
                     removed = before_filter_count - len(chart_df)
-                    self.logger.warning(
-                        f"🚨 {stock_code} 실시간 업데이트에서 전날 데이터 {removed}건 감지 및 제거: "
-                        f"{before_filter_count} → {len(chart_df)}건 (요청: {target_hour})"
+                    self.logger.debug(
+                        f"📊 {stock_code} 실시간 업데이트에서 전날 데이터 {removed}건 제거: "
+                        f"{before_filter_count} → {len(chart_df)}건"
                     )
 
                 if chart_df.empty:
-                    self.logger.error(
-                        f"❌ {stock_code} 전날 데이터만 반환됨 - 실시간 업데이트 중단 (요청: {target_hour})"
+                    self.logger.warning(
+                        f"⚠️ {stock_code} 전날 데이터만 반환됨 - 실시간 업데이트 중단"
                     )
                     return None
 
@@ -573,20 +573,20 @@ class IntradayStockManager:
 
                 if before_filter_count != len(chart_df):
                     removed = before_filter_count - len(chart_df)
-                    self.logger.warning(
-                        f"🚨 {stock_code} 실시간 업데이트에서 전날 데이터 {removed}건 감지 및 제거: "
-                        f"{before_filter_count} → {len(chart_df)}건 (요청: {target_hour})"
+                    self.logger.debug(
+                        f"📊 {stock_code} 실시간 업데이트에서 전날 데이터 {removed}건 제거: "
+                        f"{before_filter_count} → {len(chart_df)}건"
                     )
 
                 if chart_df.empty:
-                    self.logger.error(
-                        f"❌ {stock_code} 전날 데이터만 반환됨 - 실시간 업데이트 중단 (요청: {target_hour})"
+                    self.logger.warning(
+                        f"⚠️ {stock_code} 전날 데이터만 반환됨 - 실시간 업데이트 중단"
                     )
                     return None
             else:
                 # date/datetime 컬럼이 없는 경우 경고만 표시
-                self.logger.warning(
-                    f"⚠️ {stock_code} date/datetime 컬럼 없음 - 전날 데이터 검증 불가 (요청: {target_hour})"
+                self.logger.debug(
+                    f"📊 {stock_code} date/datetime 컬럼 없음 - 전날 데이터 검증 불가 (요청: {target_hour})"
                 )
 
             # ========================================
@@ -632,7 +632,7 @@ class IntradayStockManager:
             else:
                 latest_data = chart_df.copy()
                 if latest_data.empty:
-                    self.logger.warning(f"⚠️ {stock_code} API 응답 빈 데이터 (요청: {target_hour})")
+                    self.logger.debug(f"📊 {stock_code} API 응답 빈 데이터 (요청: {target_hour})")
 
             return latest_data
 
@@ -702,11 +702,11 @@ class IntradayStockManager:
             
             # historical_data와 realtime_data 결합
             if historical_data.empty and realtime_data.empty:
-                self.logger.error(f"❌ {stock_code} 과거 및 실시간 데이터 모두 없음")
+                self.logger.warning(f"⚠️ {stock_code} 과거 및 실시간 데이터 모두 없음")
                 return None
             elif historical_data.empty:
                 combined_data = realtime_data.copy()
-                self.logger.error(f"📊 {stock_code} 실시간 데이터만 사용: {len(combined_data)}건")
+                self.logger.debug(f"📊 {stock_code} 실시간 데이터만 사용: {len(combined_data)}건")
                 return None
             elif realtime_data.empty:
                 combined_data = historical_data.copy()
@@ -714,8 +714,8 @@ class IntradayStockManager:
                 
                 # 데이터 부족 시 경고 (자동 수집 비활성화 - 일반 함수에서 await 불가)
                 if len(combined_data) < 15:
-                    self.logger.warning(
-                        f"⚠️ {stock_code} 데이터 부족: {len(combined_data)}건 "
+                    self.logger.debug(
+                        f"📊 {stock_code} 데이터 부족: {len(combined_data)}건 "
                         f"(최소 15건 필요, 초기 수집 시 자동 해결됨)"
                     )
                     # 데이터가 부족해도 있는 데이터 사용 (None 반환하지 않음)

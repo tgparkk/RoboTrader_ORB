@@ -78,10 +78,10 @@ def get_stock_data_with_fallback(stock_code: str, input_date: str, input_hour: s
                 logger.debug(f"❌ {stock_code} {div_code} 시장 조회 실패")
                 
         except Exception as e:
-            logger.warning(f"⚠️ {stock_code} {div_code} 시장 조회 중 오류: {e}")
+            logger.debug(f"⚠️ {stock_code} {div_code} 시장 조회 중 오류: {e}")
             continue
-    
-    logger.warning(f"❌ {stock_code} 모든 시장에서 데이터 조회 실패")
+
+    logger.debug(f"ℹ️ {stock_code} 모든 시장에서 데이터 조회 실패")
     return None
 
 
@@ -197,9 +197,9 @@ def get_recent_minute_data(stock_code: str, minutes: int = 30,
         summary_df, chart_df = result
         
         if chart_df.empty:
-            logger.warning(f"⚠️ {stock_code} 분봉 데이터 없음")
+            logger.debug(f"ℹ️ {stock_code} 분봉 데이터 없음")
             return pd.DataFrame()
-        
+
         # 최근 N분 데이터만 필터링
         if len(chart_df) > minutes:
             chart_df = chart_df.tail(minutes)
@@ -261,7 +261,7 @@ def get_historical_minute_data(stock_code: str, target_date: str,
                 return chart_df
             else:
                 logger.debug(f"ℹ️ {stock_code} {attempt_date} 분봉 데이터 없음 (폴백 시도 {idx}/{FALLBACK_MAX_DAYS})")
-        logger.warning(f"⚠️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 분봉 데이터 없음")
+        logger.debug(f"ℹ️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 분봉 데이터 없음")
         return pd.DataFrame()
     except Exception as e:
         logger.error(f"❌ {stock_code} {target_date} 분봉 데이터 조회 오류: {e}")
@@ -377,7 +377,7 @@ def get_stock_minute_summary(stock_code: str, minutes: int = 30) -> Optional[Dic
         chart_df = get_recent_minute_data(stock_code, minutes)
         
         if chart_df is None or chart_df.empty:
-            logger.warning(f"⚠️ {stock_code} 분봉 데이터 없음")
+            logger.debug(f"ℹ️ {stock_code} 분봉 데이터 없음 (요약 계산 불가)")
             return None
         
         # 가격 정보 (표준화된 컬럼명 사용)
@@ -551,7 +551,7 @@ def get_today_minute_data(stock_code: str, target_hour: str = "",
         summary_df, chart_df = result
         
         if chart_df.empty:
-            logger.warning(f"⚠️ {stock_code} 당일 분봉 데이터 없음")
+            logger.debug(f"ℹ️ {stock_code} 당일 분봉 데이터 없음")
             return pd.DataFrame()
         
         logger.debug(f"✅ {stock_code} 당일 {target_hour}까지 분봉 데이터 조회 완료: {len(chart_df)}건")
@@ -591,7 +591,7 @@ def get_realtime_minute_data(stock_code: str) -> Optional[pd.DataFrame]:
         summary_df, chart_df = result
         
         if chart_df.empty:
-            logger.warning(f"⚠️ {stock_code} 실시간 분봉 데이터 없음")
+            logger.debug(f"ℹ️ {stock_code} 실시간 분봉 데이터 없음")
             return pd.DataFrame()
         
         logger.debug(f"✅ {stock_code} 실시간 분봉 데이터 조회 완료: {len(chart_df)}건")
@@ -699,7 +699,7 @@ def get_full_trading_day_data(stock_code: str, target_date: str = "",
             else:
                 logger.debug(f"ℹ️ {stock_code} {attempt_date} 수집된 데이터 없음 (폴백 시도 {back}/{FALLBACK_MAX_DAYS})")
 
-        logger.warning(f"⚠️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 수집 실패")
+        logger.debug(f"ℹ️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 수집 실패")
         return pd.DataFrame()
     except Exception as e:
         logger.error(f"❌ {stock_code} 전체 거래시간 데이터 수집 오류: {e}")
@@ -854,7 +854,7 @@ async def get_full_trading_day_data_async(stock_code: str, target_date: str = ""
             else:
                 logger.debug(f"ℹ️ {stock_code} {attempt_date} 비동기 수집 결과 없음 (폴백 시도 {back}/{FALLBACK_MAX_DAYS})")
 
-        logger.warning(f"⚠️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 비동기 수집 실패")
+        logger.debug(f"ℹ️ {stock_code} {target_date} 및 최근 {FALLBACK_MAX_DAYS}일 폴백 모두 비동기 수집 실패")
         return pd.DataFrame()
     except Exception as e:
         logger.error(f"❌ {stock_code} 비동기 전체 데이터 수집 오류: {e}")

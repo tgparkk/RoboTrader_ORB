@@ -85,7 +85,7 @@ class HistoricalDataCollector:
                     if new_target_hour > "153000":
                         new_target_hour = now_kst().strftime("%H%M%S")
                     
-                    self.logger.warning(f"🔄 {stock_code} 전체 데이터 조회 실패, 시간 조정하여 재시도: {target_hour} → {new_target_hour}")
+                    self.logger.debug(f"🔄 {stock_code} 전체 데이터 조회 실패, 시간 조정하여 재시도: {target_hour} → {new_target_hour}")
                     
                     # 조정된 시간으로 재시도
                     historical_data = await get_full_trading_day_data_async(
@@ -111,7 +111,7 @@ class HistoricalDataCollector:
                     self.logger.error(f"❌ {stock_code} 전체 데이터 시간 조정 중 오류: {e}")
                 
                 if historical_data is None or historical_data.empty:
-                    self.logger.error(f"❌ {stock_code} 당일 전체 분봉 데이터 조회 실패 (시간 조정 후에도 실패)")
+                    self.logger.debug(f"ℹ️ {stock_code} 당일 전체 분봉 데이터 조회 실패 (시간 조정 후에도 실패), 폴백 시도")
                     # 실패 시 기존 방식으로 폴백
                     return await self._collect_historical_data_fallback(stock_code)
             
@@ -129,10 +129,10 @@ class HistoricalDataCollector:
             
             if before_count != len(historical_data):
                 removed = before_count - len(historical_data)
-                self.logger.warning(f"⚠️ {stock_code} 초기 수집 시 전날 데이터 {removed}건 제외: {before_count} → {len(historical_data)}건")
+                self.logger.debug(f"📊 {stock_code} 초기 수집 시 전날 데이터 {removed}건 제외: {before_count} → {len(historical_data)}건")
             
             if historical_data.empty:
-                self.logger.error(f"❌ {stock_code} 당일 데이터 없음 (전날 데이터만 존재)")
+                self.logger.warning(f"⚠️ {stock_code} 당일 데이터 없음 (전날 데이터만 존재), 폴백 시도")
                 return await self._collect_historical_data_fallback(stock_code)
             
             # 데이터 정렬 및 정리 (시간 순서)
@@ -195,7 +195,7 @@ class HistoricalDataCollector:
                 if expected_3min_count >= 3:
                     self.logger.info(f"   ✅ 신호 생성 조건 충족!")
                 else:
-                    self.logger.warning(f"   ⚠️ 3분봉 데이터 부족 위험: {expected_3min_count}/3")
+                    self.logger.debug(f"   📊 3분봉 데이터 부족: {expected_3min_count}/3 (장초반 자동 해결)")
 
                 # 시장 시작시간부터 데이터가 시작되는지 확인
                 if start_time and start_time >= start_time_str:
@@ -223,7 +223,7 @@ class HistoricalDataCollector:
                 stock_data = self.manager.selected_stocks[stock_code]
                 selected_time = stock_data.selected_time
             
-            self.logger.warning(f"🔄 {stock_code} 폴백 방식으로 과거 분봉 데이터 수집")
+            self.logger.debug(f"🔄 {stock_code} 폴백 방식으로 과거 분봉 데이터 수집")
             
             # 선정 시간까지의 당일 분봉 데이터 조회 (기존 방식)
             target_hour = selected_time.strftime("%H%M%S")
@@ -249,7 +249,7 @@ class HistoricalDataCollector:
                     if new_target_hour > "153000":
                         new_target_hour = now_kst().strftime("%H%M%S")
                     
-                    self.logger.warning(f"🔄 {stock_code} 조회 실패, 시간 조정하여 재시도: {target_hour} → {new_target_hour}")
+                    self.logger.debug(f"🔄 {stock_code} 조회 실패, 시간 조정하여 재시도: {target_hour} → {new_target_hour}")
                     
                     # 조정된 시간으로 재시도
                     result = get_inquire_time_itemchartprice(
@@ -275,13 +275,13 @@ class HistoricalDataCollector:
                     self.logger.error(f"❌ {stock_code} 시간 조정 중 오류: {e}")
                 
                 if result is None:
-                    self.logger.error(f"❌ {stock_code} 폴백 분봉 데이터 조회 실패 (시간 조정 후에도 실패)")
+                    self.logger.warning(f"⚠️ {stock_code} 폴백 분봉 데이터 조회 실패 (시간 조정 후에도 실패)")
                     return False
             
             summary_df, chart_df = result
             
             if chart_df.empty:
-                self.logger.warning(f"⚠️ {stock_code} 폴백 분봉 데이터 없음")
+                self.logger.debug(f"📊 {stock_code} 폴백 분봉 데이터 없음")
                 # 빈 DataFrame이라도 저장
                 with self.manager._lock:
                     if stock_code in self.manager.selected_stocks:
@@ -311,7 +311,7 @@ class HistoricalDataCollector:
                 
                 self.logger.info(f"✅ {stock_code} 폴백 분봉 수집 완료: {data_count}건 "
                                f"({start_time} ~ {end_time})")
-                self.logger.warning(f"⚠️ 제한된 데이터 범위 (API 제한으로 최대 30분봉)")
+                self.logger.info(f"ℹ️ {stock_code} 제한된 데이터 범위 (API 제한으로 최대 30분봉)")
             else:
                 self.logger.info(f"ℹ️ {stock_code} 폴백 방식도 데이터 없음")
             
