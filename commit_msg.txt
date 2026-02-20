@@ -1,0 +1,11 @@
+fix: restore open virtual positions on startup for EOD liquidation
+
+- Add _restore_open_virtual_positions() to system initialization
+- Loads unclosed BUY records from DB and sets them as POSITIONED
+- Ensures 15:00 EOD liquidation covers positions from previous days
+- Also bulk-closed 133 stale positions (Jan 27 - Feb 19) in DB
+
+Previously, program restart cleared memory so old positions were
+never eligible for EOD liquidation, accumulating indefinitely.
+
+Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>

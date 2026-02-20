@@ -243,6 +243,9 @@ class DayTradingBot:
             # 5. DB에서 오늘 날짜의 후보 종목 복원
             await self._restore_todays_candidates()
             
+            # 6. 미청산 가상 포지션 복원
+            await self._restore_open_virtual_positions()
+            
             self.logger.info("✅ 시스템 초기화 완료")
             return True
             
@@ -1111,6 +1114,67 @@ class DayTradingBot:
             
         except Exception as e:
             self.logger.error(f"❌ 오늘 후보 종목 복원 실패: {e}")
+
+    async def _restore_open_virtual_positions(self):
+        """미청산 가상매매 포지션을 POSITIONED 상태로 복원"""
+        try:
+            conn = self.db_manager._get_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute('''
+                        SELECT b.id, b.stock_code, b.stock_name, b.price, b.quantity, b.timestamp
+                        FROM virtual_trading_records b
+                        WHERE b.action='BUY' AND b.is_test=true
+                          AND NOT EXISTS (
+                            SELECT 1 FROM virtual_trading_records s 
+                            WHERE s.action='SELL' AND s.buy_record_id=b.id
+                          )
+                        ORDER BY b.timestamp
+                    ''')
+                    rows = cursor.fetchall()
+            finally:
+                self.db_manager._put_connection(conn)
+
+            if not rows:
+                self.logger.info("📊 미청산 가상 포지션 없음")
+                return
+
+            self.logger.info(f"🔄 미청산 가상 포지션 {len(rows)}건 복원 시작")
+
+            restored = 0
+            for row in rows:
+                buy_id, code, name, buy_price, qty, ts = row
+                try:
+                    # 종목을 SELECTED로 추가 후 POSITIONED로 전환
+                    success = await self.trading_manager.add_selected_stock(
+                        stock_code=code,
+                        stock_name=name or f"Stock_{code}",
+                        selection_reason=f"미청산 복원: {qty}주 @{buy_price:,.0f}원",
+                        prev_close=float(buy_price)
+                    )
+                    if success:
+                        # 가상 포지션 설정
+                        trading_stock = self.trading_manager.trading_stocks.get(code)
+                        if trading_stock:
+                            from core.models import Position, StockState
+                            trading_stock.position = Position(
+                                stock_code=code,
+                                quantity=qty,
+                                avg_price=float(buy_price),
+                            )
+                            # buy_record_id는 매도 시 필요 — metadata에 저장
+                            if not hasattr(trading_stock, 'metadata') or trading_stock.metadata is None:
+                                trading_stock.metadata = {}
+                            trading_stock.metadata['buy_record_id'] = buy_id
+                            trading_stock.state = StockState.POSITIONED
+                            restored += 1
+                except Exception as e:
+                    self.logger.warning(f"⚠️ {code}({name}) 포지션 복원 실패: {e}")
+
+            self.logger.info(f"✅ 미청산 가상 포지션 {restored}/{len(rows)}건 복원 완료 (15:00 장마감 청산 대상)")
+
+        except Exception as e:
+            self.logger.error(f"❌ 미청산 가상 포지션 복원 실패: {e}")
 
     async def _select_premarket_candidates(self):
         """장전 후보 종목 선정 (08:55~08:59)"""

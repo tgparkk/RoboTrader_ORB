@@ -70,7 +70,11 @@
       "Bash(del memory_minute_data_*.txt)",
       "Read(//d/GIT/RoboTrader_orb/**)",
       "Bash(powershell -Command:*)",
-      "Bash(cut:*)"
+      "Bash(cut:*)",
+      "Bash(perl -pe:*)",
+      "Bash(python3:*)",
+      "Bash(\"d:/GIT/RoboTrader_orb/venv/Scripts/python.exe\" -c:*)",
+      "Bash(\"d:/GIT/RoboTrader_orb/venv/Scripts/python.exe\" -c \"\nimport re, collections, sys, io\nsys.stdout = io.TextIOWrapper\\(sys.stdout.buffer, encoding=''utf-8''\\)\nwith open\\(''d:/GIT/RoboTrader_orb/logs/trading_20260219.log'', encoding=''utf-8''\\) as f:\n    lines = f.readlines\\(\\)\n\nerrors = [l for l in lines if ''| ERROR |'' in l]\nprint\\(f''Total ERROR lines: {len\\(errors\\)}''\\)\nprint\\(\\)\n\nnormalized = []\nfor l in errors:\n    l2 = re.sub\\(r''\\\\b\\\\d{6}\\\\b'', ''XXXXXX'', l\\)\n    l2 = re.sub\\(r''\\\\d{2}:\\\\d{2}:\\\\d{2}'', ''TT'', l2\\)\n    m = re.search\\(r''\\\\| ERROR \\\\| \\(.+\\)'', l2\\)\n    if m:\n        normalized.append\\(m.group\\(1\\).strip\\(\\)\\)\n\nc = collections.Counter\\(normalized\\)\nfor msg, cnt in c.most_common\\(\\):\n    print\\(f''{cnt:5d}  {msg}''\\)\n\")"
     ],
     "deny": [],
     "ask": []
