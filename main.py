@@ -317,6 +317,12 @@ class DayTradingBot:
 
                 current_time = now_kst()
 
+                # 🆕 P1-1: 15:15 Failsafe Sweep — DB에서 미청산 BUY 직접 조회 후 강제 청산
+                if current_time.hour == 15 and current_time.minute == 15:
+                    if not hasattr(self, '_failsafe_sweep_done'):
+                        await self._failsafe_sweep_unclosed_buys()
+                        self._failsafe_sweep_done = True
+
                 # 🚨 장마감 시간 시장가 일괄매도 체크 (한 번만 실행) - 동적 시간 적용
                 if MarketHours.is_eod_liquidation_time('KRX', current_time):
                     if not hasattr(self, '_eod_liquidation_done'):
@@ -595,9 +601,10 @@ class DayTradingBot:
                             virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
                             self.fund_manager.update_total_funds(virtual_balance)
 
-                            # 🆕 [지영] 트레일링 스탑용 ORB 메타데이터 설정
+                            # 🆕 [지영] 트레일링 스탑용 ORB 메타데이터 설정 + buy_record_id 저장
                             signal_meta = buy_info.get('signal_metadata', {})
                             trading_stock.metadata = {
+                                'buy_record_id': buy_record_id,  # 매도 시 매수 기록 추적용
                                 'entry_price': buy_info['buy_price'],
                                 'stop_loss': signal_meta.get('stop_loss', 0) or getattr(trading_stock, 'stop_loss_price', 0) or 0,
                                 'take_profit': signal_meta.get('take_profit', 0) or getattr(trading_stock, 'profit_target_price', 0) or 0,
@@ -993,6 +1000,98 @@ class DayTradingBot:
                 "보유 포지션 수동 청산 필요"
             )
     
+    async def _failsafe_sweep_unclosed_buys(self):
+        """P1-1: 15:15 Failsafe Sweep — DB에서 미청산 BUY 레코드 직접 조회 후 강제 청산.
+        메모리 포지션과 무관하게, DB 기준으로 미청산 건을 모두 찾아 매도 처리한다."""
+        try:
+            if not self.db_manager:
+                self.logger.warning("⚠️ Failsafe sweep: DB 매니저 없음, 스킵")
+                return
+
+            from utils.korean_time import now_kst
+            today = now_kst().strftime('%Y-%m-%d')
+
+            conn = self.db_manager._get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute('''
+                    SELECT b.id, b.stock_code, b.stock_name, b.price, b.quantity
+                    FROM virtual_trading_records b
+                    WHERE b.action = 'BUY' AND b.is_test = true
+                      AND b.timestamp::date = %s::date
+                      AND NOT EXISTS (
+                          SELECT 1 FROM virtual_trading_records s
+                          WHERE s.action = 'SELL' AND s.buy_record_id = b.id
+                      )
+                ''', (today,))
+                unclosed = cursor.fetchall()
+            finally:
+                self.db_manager._put_connection(conn)
+
+            if not unclosed:
+                self.logger.info("✅ 15:15 Failsafe sweep: 미청산 BUY 레코드 없음")
+                return
+
+            self.logger.warning(f"🚨 15:15 Failsafe sweep: 미청산 BUY {len(unclosed)}건 발견, 강제 청산 시작")
+
+            for buy_id, stock_code, stock_name, buy_price, qty in unclosed:
+                try:
+                    # 현재가 조회
+                    sell_price = 0.0
+                    current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+                    if current_price_info:
+                        sell_price = float(current_price_info.get('current_price') or 0)
+                    if sell_price <= 0:
+                        price_obj = self.api_manager.get_current_price(stock_code)
+                        if price_obj:
+                            sell_price = float(price_obj.current_price)
+                    if sell_price <= 0:
+                        sell_price = float(buy_price)  # 최후 fallback: 매수가
+
+                    # DB에 직접 SELL 기록
+                    success = self.decision_engine.virtual_trading.execute_virtual_sell(
+                        stock_code=stock_code,
+                        stock_name=stock_name or f"Stock_{stock_code}",
+                        price=sell_price,
+                        quantity=qty,
+                        strategy="ORB",
+                        reason="15:15 failsafe sweep (DB 미청산 강제 청산)",
+                        buy_record_id=buy_id
+                    )
+
+                    if success:
+                        profit = (sell_price - float(buy_price)) * qty
+                        self.decision_engine.virtual_trading.record_trade_pnl(profit)
+                        self.logger.info(
+                            f"🧹 Failsafe 청산: {stock_code}({stock_name}) "
+                            f"{qty}주 @{sell_price:,.0f}원 (buy_id={buy_id}, 손익={profit:+,.0f}원)"
+                        )
+
+                        # 메모리 포지션도 정리 (있는 경우)
+                        from core.models import StockState
+                        trading_stock = self.trading_manager.trading_stocks.get(stock_code)
+                        if trading_stock and trading_stock.state != StockState.COMPLETED:
+                            self.trading_manager._change_stock_state(
+                                stock_code, StockState.COMPLETED, "15:15 failsafe sweep"
+                            )
+                    else:
+                        self.logger.error(f"❌ Failsafe 청산 실패: {stock_code} buy_id={buy_id}")
+
+                except Exception as e:
+                    self.logger.error(f"❌ Failsafe 청산 개별 오류 ({stock_code}, buy_id={buy_id}): {e}")
+
+            self.logger.info(f"✅ 15:15 Failsafe sweep 완료")
+
+            # 텔레그램 알림
+            await self.telegram.notify_system_status(
+                f"🧹 15:15 Failsafe sweep: {len(unclosed)}건 미청산 BUY 강제 청산 완료"
+            )
+
+        except Exception as e:
+            self.logger.error(f"❌ 15:15 Failsafe sweep 오류: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+
     async def _log_system_status(self):
         """시스템 상태 로깅"""
         try:

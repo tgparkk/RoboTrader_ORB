@@ -336,39 +336,51 @@ class TradingDecisionEngine:
             quantity = trading_stock.position.quantity
             buy_price = trading_stock.position.avg_price
 
-            # DB에서 당일 매수 기록 조회 (DB 추적용)
-            if not self.db_manager:
-                self.logger.error(f"❌ 가상 매도 실패: DB 매니저 없음")
-                return False
+            # 매수 기록 ID 결정: metadata 우선, 없으면 DB fallback (날짜 필터 없음)
+            buy_id = None
 
-            from utils.korean_time import now_kst
-            today = now_kst().strftime('%Y-%m-%d')
+            # 1) metadata에서 buy_record_id 가져오기
+            if hasattr(trading_stock, 'metadata') and trading_stock.metadata:
+                buy_id = trading_stock.metadata.get('buy_record_id')
+                if buy_id:
+                    self.logger.debug(f"📋 metadata에서 buy_record_id={buy_id} 사용 ({trading_stock.stock_code})")
 
-            conn = self.db_manager._get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute('''
-                    SELECT id, price, quantity
-                    FROM virtual_trading_records
-                    WHERE stock_code = %s AND action = 'BUY'
-                    AND timestamp::date = %s::date
-                    AND id NOT IN (
-                        SELECT buy_record_id FROM virtual_trading_records
-                        WHERE action = 'SELL' AND buy_record_id IS NOT NULL
-                    )
-                    ORDER BY timestamp ASC
-                    LIMIT 1
-                ''', (trading_stock.stock_code, today))
+            # 2) _virtual_buy_record_id fallback
+            if not buy_id and hasattr(trading_stock, '_virtual_buy_record_id') and trading_stock._virtual_buy_record_id:
+                buy_id = trading_stock._virtual_buy_record_id
+                self.logger.debug(f"📋 _virtual_buy_record_id={buy_id} 사용 ({trading_stock.stock_code})")
 
-                buy_record = cursor.fetchone()
-            finally:
-                self.db_manager._put_connection(conn)
+            # 3) DB fallback (날짜 필터 없이 미청산 BUY 조회)
+            if not buy_id:
+                if not self.db_manager:
+                    self.logger.error(f"❌ 가상 매도 실패: DB 매니저 없음")
+                    return False
 
-            if not buy_record:
-                self.logger.warning(f"⚠️ 가상 매도 실패: 당일 매수 기록 없음 ({trading_stock.stock_code})")
-                return False
+                conn = self.db_manager._get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute('''
+                        SELECT id, price, quantity
+                        FROM virtual_trading_records
+                        WHERE stock_code = %s AND action = 'BUY'
+                        AND id NOT IN (
+                            SELECT buy_record_id FROM virtual_trading_records
+                            WHERE action = 'SELL' AND buy_record_id IS NOT NULL
+                        )
+                        ORDER BY timestamp DESC
+                        LIMIT 1
+                    ''', (trading_stock.stock_code,))
 
-            buy_id = buy_record[0]
+                    buy_record = cursor.fetchone()
+                finally:
+                    self.db_manager._put_connection(conn)
+
+                if not buy_record:
+                    self.logger.warning(f"⚠️ 가상 매도 실패: 미청산 매수 기록 없음 ({trading_stock.stock_code})")
+                    return False
+
+                buy_id = buy_record[0]
+                self.logger.info(f"📋 DB fallback으로 buy_record_id={buy_id} 조회 ({trading_stock.stock_code})")
 
             # 가상 매도 실행 (포지션 수량 사용)
             success = self.virtual_trading.execute_virtual_sell(
