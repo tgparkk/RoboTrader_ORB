@@ -1,8 +1,10 @@
-fix_eod_close: resolve virtual sell buy_record tracking and add failsafe sweep
+config: disable_time_trailing_for_better_performance
 
-P0-1: execute_virtual_sell uses metadata buy_record_id first, DB fallback without date filter
-P0-2: Store buy_record_id in metadata after successful virtual buy
-P1-1: Add 15:15 failsafe sweep for unclosed BUY records
-P1-2: Add UNIQUE partial index on buy_record_id for SELL records
+- Set enable_time_trailing = False in ORB strategy config
+- Production code simulation (12-month, 232 days) showed:
+  - ON:  +48.7%, Sharpe 2.84, MDD -13.9%, 7329 trades
+  - OFF: +54.4%, Sharpe 3.14, MDD -13.5%, 5165 trades
+- 14:30 breakeven stop was causing 2701 unnecessary loss trades
+- TP/SL/15:00 liquidation still active
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>

@@ -69,7 +69,7 @@ class ORBStrategyConfig:
     liquidation_time: str = "15:00"  # 장마감 전 청산
 
     # 시간 기반 트레일링 스탑
-    enable_time_trailing: bool = True        # 시간 트레일링 스탑 활성화
+    enable_time_trailing: bool = False       # 시간 트레일링 스탑 비활성화 — 운영코드 시뮬 결과: OFF가 Sharpe 2.84→3.14, 수익 +48.7%→+54.4% (2026-02-22)
     trailing_start_time: str = "11:00"       # 트레일링 시작 (수익 +1% 이상 → +0.5% 스탑)
     breakeven_time: str = "14:30"            # 본전 스탑 (수익 0% 이하 → 즉시 청산) — 14:00→14:30 멀티버스 검증 (두 기간 모두 개선)
     tighten_time: str = "14:30"              # 익절선 축소 (현재 수익의 50%로) — 14:20→14:30
