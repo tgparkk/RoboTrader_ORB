@@ -413,3 +413,101 @@ class TradingDecisionEngine:
             import traceback
             self.logger.error(traceback.format_exc())
             return False
+
+    async def execute_real_buy(self, trading_stock, reason: str, buy_price: float,
+                               quantity: int, candle_time=None) -> bool:
+        """
+        실전 매수 주문 실행
+
+        Args:
+            trading_stock: 거래 종목 정보
+            reason: 매수 사유
+            buy_price: 매수 가격
+            quantity: 매수 수량
+            candle_time: 캔들 시점 (중복 신호 방지용)
+
+        Returns:
+            bool: 주문 성공 여부
+        """
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+
+            if buy_price <= 0 or quantity <= 0:
+                self.logger.error(f"❌ 실전 매수 실패: 유효하지 않은 파라미터 "
+                                f"(가격={buy_price}, 수량={quantity})")
+                return False
+
+            self.logger.info(f"📈 실전 매수 주문: {stock_code}({stock_name}) "
+                           f"{quantity}주 @{buy_price:,.0f}원 - {reason}")
+
+            success = await self.trading_manager.execute_buy_order(
+                stock_code, quantity, buy_price, reason=reason
+            )
+
+            if success:
+                self.logger.info(f"✅ 실전 매수 주문 접수 성공: {stock_code}({stock_name})")
+            else:
+                self.logger.warning(f"⚠️ 실전 매수 주문 실패: {stock_code}({stock_name})")
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"❌ 실전 매수 실행 오류 ({trading_stock.stock_code}): {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return False
+
+    async def execute_real_sell(self, trading_stock, reason: str) -> bool:
+        """
+        실전 매도 주문 실행
+
+        Args:
+            trading_stock: 거래 종목 정보
+            reason: 매도 사유
+
+        Returns:
+            bool: 주문 성공 여부
+        """
+        try:
+            stock_code = trading_stock.stock_code
+            stock_name = trading_stock.stock_name
+
+            if not trading_stock.position or trading_stock.position.quantity <= 0:
+                self.logger.warning(f"⚠️ 실전 매도 실패: 포지션 없음 ({stock_code})")
+                return False
+
+            quantity = int(trading_stock.position.quantity)
+
+            # 현재가 조회
+            current_price = 0.0
+            current_price_info = self.intraday_manager.get_cached_current_price(stock_code)
+            if current_price_info:
+                current_price = float(current_price_info.get('current_price') or 0)
+            if current_price <= 0 and trading_stock.position:
+                current_price = float(trading_stock.position.current_price or trading_stock.position.avg_price or 0)
+
+            if current_price <= 0:
+                self.logger.error(f"❌ 실전 매도 실패: 현재가 조회 실패 ({stock_code})")
+                return False
+
+            self.logger.info(f"📉 실전 매도 주문: {stock_code}({stock_name}) "
+                           f"{quantity}주 @{current_price:,.0f}원 - {reason}")
+
+            success = await self.trading_manager.execute_sell_order(
+                stock_code, quantity, current_price,
+                reason=reason, market=True
+            )
+
+            if success:
+                self.logger.info(f"✅ 실전 매도 주문 접수 성공: {stock_code}({stock_name})")
+            else:
+                self.logger.warning(f"⚠️ 실전 매도 주문 실패: {stock_code}({stock_name})")
+
+            return success
+
+        except Exception as e:
+            self.logger.error(f"❌ 실전 매도 실행 오류 ({trading_stock.stock_code}): {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+            return False

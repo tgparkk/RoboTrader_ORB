@@ -166,7 +166,7 @@ def auth(svr: str = 'prod', product: str = '01') -> bool:
         url += '/oauth2/tokenP'
 
         try:
-            res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader())
+            res = requests.post(url, data=json.dumps(p), headers=_getBaseHeader(), timeout=10)
 
             if res.status_code == 200:
                 result = _getResultObject(res.json())
@@ -231,7 +231,7 @@ def set_order_hash_key(headers: Dict, params: Dict) -> None:
     url = f"{_TRENV.my_url}/uapi/hashkey"
 
     try:
-        res = requests.post(url, data=json.dumps(params), headers=headers)
+        res = requests.post(url, data=json.dumps(params), headers=headers, timeout=10)
         if res.status_code == 200:
             headers['hashkey'] = _getResultObject(res.json()).HASH
     except Exception as e:
@@ -334,9 +334,9 @@ def _url_fetch(api_url: str, ptr_id: str, tr_cont: str, params: Dict,
             if postFlag:
                 if hashFlag:
                     set_order_hash_key(headers, params)
-                res = requests.post(url, headers=headers, data=json.dumps(params))
+                res = requests.post(url, headers=headers, data=json.dumps(params), timeout=10)
             else:
-                res = requests.get(url, headers=headers, params=params)
+                res = requests.get(url, headers=headers, params=params, timeout=10)
 
             # 응답 처리
             if res.status_code == 200:
@@ -375,9 +375,9 @@ def _url_fetch(api_url: str, ptr_id: str, tr_cont: str, params: Dict,
                                 if postFlag:
                                     if hashFlag:
                                         set_order_hash_key(headers, params)
-                                    res = requests.post(url, headers=headers, data=json.dumps(params))
+                                    res = requests.post(url, headers=headers, data=json.dumps(params), timeout=10)
                                 else:
-                                    res = requests.get(url, headers=headers, params=params)
+                                    res = requests.get(url, headers=headers, params=params, timeout=10)
 
                                 # 재호출 결과 처리
                                 if res.status_code == 200:

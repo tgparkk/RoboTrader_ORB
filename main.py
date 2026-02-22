@@ -626,33 +626,31 @@ class DayTradingBot:
                 else:
                     # [실제 매매 모드]
                     try:
-                        # 3분 단위로 정규화된 캔들 시점을 전달하여 중복 신호 방지
-                        raw_candle_time = data_3min['datetime'].iloc[-1]
-                        minute_normalized = (raw_candle_time.minute // 3) * 3
-                        current_candle_time = raw_candle_time.replace(minute=minute_normalized, second=0, microsecond=0)
-                        await self.decision_engine.execute_real_buy(
+                        buy_success = await self.decision_engine.execute_real_buy(
                             trading_stock,
                             buy_reason,
                             buy_info['buy_price'],
-                            buy_info['quantity'],
-                            candle_time=current_candle_time
+                            buy_info['quantity']
                         )
-                        # 상태는 주문 처리 로직에서 자동으로 변경됨 (SELECTED -> BUY_PENDING -> POSITIONED)
+                        # 상태는 execute_buy_order 내부에서 자동 변경 (SELECTED -> BUY_PENDING -> POSITIONED)
 
-                        # 🆕 실거래 모드에서도 트레일링 스탑용 ORB 메타데이터 설정
-                        signal_meta = buy_info.get('signal_metadata', {})
-                        trading_stock.metadata = {
-                            'entry_price': buy_info['buy_price'],
-                            'stop_loss': signal_meta.get('stop_loss', 0) or getattr(trading_stock, 'stop_loss_price', 0) or 0,
-                            'take_profit': signal_meta.get('take_profit', 0) or getattr(trading_stock, 'profit_target_price', 0) or 0,
-                            'orb_high': signal_meta.get('orb_high', 0),
-                            'orb_low': signal_meta.get('orb_low', 0),
-                        }
+                        if buy_success:
+                            # 실거래 모드에서도 트레일링 스탑용 ORB 메타데이터 설정
+                            signal_meta = buy_info.get('signal_metadata', {})
+                            trading_stock.metadata = {
+                                'entry_price': buy_info['buy_price'],
+                                'stop_loss': signal_meta.get('stop_loss', 0) or getattr(trading_stock, 'stop_loss_price', 0) or 0,
+                                'take_profit': signal_meta.get('take_profit', 0) or getattr(trading_stock, 'profit_target_price', 0) or 0,
+                                'orb_high': signal_meta.get('orb_high', 0),
+                                'orb_low': signal_meta.get('orb_low', 0),
+                            }
 
-                        self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
+                            self.logger.info(f"🔥 실제 매수 주문 완료: {stock_code}({stock_name}) - {buy_reason}")
 
-                        # 🆕 당일 매수 횟수 증가 (재진입 제한용)
-                        trading_stock.increment_daily_buy_count()
+                            # 당일 매수 횟수 증가 (재진입 제한용)
+                            trading_stock.increment_daily_buy_count()
+                        else:
+                            self.logger.warning(f"⚠️ 실제 매수 주문 실패: {stock_code}({stock_name})")
                     except Exception as e:
                         self.logger.error(f"❌ 실제 매수 처리 오류: {e}")
                     
@@ -730,18 +728,28 @@ class DayTradingBot:
                     else:
                         # [실제 매매 모드]
                         try:
-                            await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
-                            self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
+                            sell_success = await self.decision_engine.execute_real_sell(trading_stock, sell_reason)
+                            if sell_success:
+                                self.logger.info(f"📉 실제 매도 주문 완료: {stock_code}({stock_name}) - {sell_reason}")
+                            else:
+                                self.logger.warning(f"⚠️ 실제 매도 주문 실패: {stock_code}({stock_name}) - {sell_reason}")
+                                # 손절 매도 실패 시 긴급 알림
+                                if "손절" in sell_reason or "stop_loss" in sell_reason.lower():
+                                    await self.telegram.notify_urgent_signal(
+                                        f"🚨 긴급: 손절 매도 실패!\n"
+                                        f"종목: {stock_code}({stock_name})\n"
+                                        f"사유: {sell_reason}\n"
+                                        f"→ VI 발동 또는 네트워크 장애 의심\n"
+                                        f"→ 수동 매도 확인 필요"
+                                    )
                         except Exception as e:
                             self.logger.error(f"❌ 실제 매도 처리 오류: {e}")
-                            # 🆕 [민수] 손절 매도 실패 시 긴급 알림 (VI/네트워크 장애 의심)
                             if "손절" in sell_reason or "stop_loss" in sell_reason.lower():
                                 await self.telegram.notify_urgent_signal(
-                                    f"🚨 긴급: 손절 매도 실패!\n"
+                                    f"🚨 긴급: 손절 매도 예외 발생!\n"
                                     f"종목: {stock_code}({stock_name})\n"
                                     f"사유: {sell_reason}\n"
                                     f"오류: {e}\n"
-                                    f"→ VI 발동 또는 네트워크 장애 의심\n"
                                     f"→ 수동 매도 확인 필요"
                                 )
         except Exception as e:
@@ -943,6 +951,7 @@ class DayTradingBot:
 
             if use_virtual:
                 self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 가상 일괄청산 시작: {len(positioned_stocks)}종목")
+                failed_virtual = []
                 for trading_stock in positioned_stocks:
                     try:
                         if not trading_stock.position or trading_stock.position.quantity <= 0:
@@ -952,16 +961,32 @@ class DayTradingBot:
                         reason = f"{eod_hour}:{eod_minute:02d} 시장가 일괄청산"
                         moved = self.trading_manager.move_to_sell_candidate(stock_code, reason)
                         if moved:
-                            ok = await self.decision_engine.execute_virtual_sell(trading_stock, None, reason)
+                            # 최대 3회 재시도
+                            ok = False
+                            for attempt in range(3):
+                                ok = await self.decision_engine.execute_virtual_sell(trading_stock, None, reason)
+                                if ok:
+                                    break
+                                self.logger.warning(f"⚠️ 가상 일괄청산 실패 ({attempt+1}/3): {stock_code}({stock_name})")
+                                if attempt < 2:
+                                    await asyncio.sleep(1)
                             if ok:
                                 virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
                                 self.fund_manager.update_total_funds(virtual_balance)
                                 self.logger.info(f"📉 가상 일괄청산: {stock_code}({stock_name}) - {reason}")
                                 self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 일괄청산 체결")
                             else:
-                                self.logger.warning(f"⚠️ 가상 일괄청산 실패: {stock_code}({stock_name})")
+                                failed_virtual.append(f"{stock_code}({stock_name})")
                     except Exception as se:
                         self.logger.error(f"❌ {eod_hour}:{eod_minute:02d} 가상 청산 개별 오류({trading_stock.stock_code}): {se}")
+                        failed_virtual.append(f"{trading_stock.stock_code}")
+
+                if failed_virtual:
+                    await self.telegram.notify_critical(
+                        "가상 일괄청산 일부 실패",
+                        f"실패 종목: {', '.join(failed_virtual)}",
+                        "미청산 포지션 확인 필요"
+                    )
                 self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 가상 일괄청산 완료")
 
                 # 🆕 [민수] 장 마감 후 메모리 정리
@@ -970,6 +995,7 @@ class DayTradingBot:
 
             self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 일괄매도 시작: {len(positioned_stocks)}종목")
 
+            failed_stocks = []
             for trading_stock in positioned_stocks:
                 try:
                     if not trading_stock.position or trading_stock.position.quantity <= 0:
@@ -979,16 +1005,42 @@ class DayTradingBot:
                     stock_name = trading_stock.stock_name
                     quantity = int(trading_stock.position.quantity)
                     current_price = 0.0
+                    reason = f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도"
 
-                    moved = self.trading_manager.move_to_sell_candidate(stock_code, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도")
+                    moved = self.trading_manager.move_to_sell_candidate(stock_code, reason)
                     if moved:
-                        await self.trading_manager.execute_sell_order(
-                            stock_code, quantity, current_price, f"{eod_hour}:{eod_minute:02d} 시장가 일괄매도", market=True
-                        )
-                        self.logger.info(f"🚨 {eod_hour}:{eod_minute:02d} 시장가 매도: {stock_code}({stock_name}) {quantity}주 시장가 주문")
+                        # 최대 3회 재시도
+                        sell_success = False
+                        for attempt in range(3):
+                            try:
+                                sell_success = await self.trading_manager.execute_sell_order(
+                                    stock_code, quantity, current_price, reason, market=True
+                                )
+                                if sell_success:
+                                    self.logger.info(f"🚨 {reason}: {stock_code}({stock_name}) {quantity}주 시장가 주문")
+                                    break
+                                else:
+                                    self.logger.warning(f"⚠️ {reason} 실패 ({attempt+1}/3): {stock_code}({stock_name})")
+                                    if attempt < 2:
+                                        await asyncio.sleep(2)
+                            except Exception as retry_e:
+                                self.logger.error(f"❌ {reason} 오류 ({attempt+1}/3): {stock_code} - {retry_e}")
+                                if attempt < 2:
+                                    await asyncio.sleep(2)
+
+                        if not sell_success:
+                            failed_stocks.append(f"{stock_code}({stock_name}) {quantity}주")
 
                 except Exception as se:
                     self.logger.error(f"❌ {eod_hour}:{eod_minute:02d} 시장가 매도 개별 처리 오류({trading_stock.stock_code}): {se}")
+                    failed_stocks.append(f"{trading_stock.stock_code}")
+
+            if failed_stocks:
+                await self.telegram.notify_critical(
+                    "장마감 청산 일부 실패",
+                    f"실패 종목: {', '.join(failed_stocks)}",
+                    "수동 매도 확인 필요"
+                )
 
             self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 시장가 일괄매도 요청 완료")
 
