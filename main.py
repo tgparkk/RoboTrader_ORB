@@ -1294,6 +1294,10 @@ class DayTradingBot:
 
             self.logger.info(f"🔄 미청산 가상 포지션 {len(rows)}건 복원 시작")
 
+            from core.models import Position, StockState
+            from utils.korean_time import now_kst
+            today = now_kst().strftime('%Y%m%d')
+
             restored = 0
             for row in rows:
                 buy_id, code, name, buy_price, qty, ts = row
@@ -1309,7 +1313,6 @@ class DayTradingBot:
                         # 가상 포지션 설정
                         trading_stock = self.trading_manager.trading_stocks.get(code)
                         if trading_stock:
-                            from core.models import Position, StockState
                             trading_stock.position = Position(
                                 stock_code=code,
                                 quantity=qty,
@@ -1319,6 +1322,57 @@ class DayTradingBot:
                             if not hasattr(trading_stock, 'metadata') or trading_stock.metadata is None:
                                 trading_stock.metadata = {}
                             trading_stock.metadata['buy_record_id'] = buy_id
+
+                            # 전일 vs 당일 구분
+                            buy_date = str(ts)[:10].replace('-', '')
+                            is_stale = (buy_date != today)
+
+                            # SL/TP 복원: 당일 포지션은 PG orb_ranges에서 조회
+                            target_price = None
+                            stop_loss = None
+                            orb_source = "고정비율"
+
+                            if not is_stale and self.pg_manager:
+                                try:
+                                    orb_data = self.pg_manager.execute_query(
+                                        "SELECT orb_high, orb_low, range_size FROM orb_ranges "
+                                        "WHERE stock_code = %s AND trading_date = %s LIMIT 1",
+                                        (code, now_kst().strftime('%Y-%m-%d'))
+                                    )
+                                    if orb_data and len(orb_data) > 0:
+                                        orb_high, orb_low, range_size = [float(x) for x in orb_data[0]]
+                                        from config.orb_strategy_config import DEFAULT_ORB_CONFIG
+                                        target_price = orb_high + (range_size * DEFAULT_ORB_CONFIG.take_profit_multiplier)
+                                        stop_loss = orb_low
+                                        orb_source = "ORB 레인지"
+                                except Exception as orb_err:
+                                    self.logger.warning(f"⚠️ {code} ORB 데이터 조회 실패: {orb_err}")
+
+                            # fallback: 매수가 기준 고정비율
+                            if target_price is None:
+                                target_price = float(buy_price) * 1.03  # +3%
+                                stop_loss = float(buy_price) * 0.98     # -2%
+
+                            # TradingStock 필드 설정
+                            trading_stock.stop_loss_price = stop_loss
+                            trading_stock.profit_target_price = target_price
+                            trading_stock.metadata['entry_price'] = float(buy_price)
+                            trading_stock.metadata['stop_loss'] = stop_loss
+                            trading_stock.metadata['take_profit'] = target_price
+
+                            # 전일 미청산 → force_liquidate 설정
+                            if is_stale:
+                                trading_stock.metadata['force_liquidate'] = True
+                                self.logger.info(
+                                    f"🔴 {code}({name}) 전일 미청산 → 즉시 청산 예약 "
+                                    f"(안전 SL:{stop_loss:,.0f} / TP:{target_price:,.0f})"
+                                )
+                            else:
+                                self.logger.info(
+                                    f"🔵 {code}({name}) 당일 포지션 복원({orb_source}) "
+                                    f"SL:{stop_loss:,.0f} / TP:{target_price:,.0f}"
+                                )
+
                             self.trading_manager._change_stock_state(
                                 code, StockState.POSITIONED, f"미청산 포지션 복구: {qty}주 @{buy_price:,.0f}원"
                             )
@@ -1327,20 +1381,6 @@ class DayTradingBot:
                     self.logger.warning(f"⚠️ {code}({name}) 포지션 복원 실패: {e}")
 
             self.logger.info(f"✅ 미청산 가상 포지션 {restored}/{len(rows)}건 복원 완료")
-
-            # ORB 당일 청산 원칙: 전일 미청산 포지션은 장 시작 시 즉시 청산 예약
-            # metadata에 force_liquidate 플래그를 설정하여 다음 매도 판단에서 즉시 청산
-            for row in rows:
-                buy_id, code, name, buy_price, qty, ts = row
-                trading_stock = self.trading_manager.trading_stocks.get(code)
-                if trading_stock and trading_stock.position:
-                    if not hasattr(trading_stock, 'metadata') or trading_stock.metadata is None:
-                        trading_stock.metadata = {}
-                    trading_stock.metadata['force_liquidate'] = True
-                    trading_stock.metadata['entry_price'] = float(buy_price)
-                    trading_stock.metadata['stop_loss'] = 0  # 즉시 청산이므로 의미 없음
-                    trading_stock.metadata['take_profit'] = float('inf')
-                    self.logger.info(f"🔴 {code}({name}) 전일 미청산 → 장 시작 즉시 청산 예약")
 
         except Exception as e:
             self.logger.error(f"❌ 미청산 가상 포지션 복원 실패: {e}")
@@ -1767,7 +1807,7 @@ class DayTradingBot:
                         today = now_kst().strftime('%Y-%m-%d')
                         orb_data = self.pg_manager.execute_query(
                             "SELECT orb_high, orb_low, range_size FROM orb_ranges "
-                            "WHERE stock_code = %s AND trade_date = %s LIMIT 1",
+                            "WHERE stock_code = %s AND trading_date = %s LIMIT 1",
                             (code, today)
                         )
                         if orb_data and len(orb_data) > 0:
@@ -1834,13 +1874,19 @@ class DayTradingBot:
         """시스템 종료"""
         try:
             self.logger.info("🛑 시스템 종료 시작")
-            
+
+            # 일일 요약 PG 저장 (텔레그램 활성화 여부와 무관하게 항상 실행)
+            try:
+                await self.telegram.notify_daily_summary()
+            except Exception as e:
+                self.logger.warning(f"⚠️ 일일 요약 저장 실패: {e}")
+
             # 데이터 수집 중단
             self.data_collector.stop_collection()
-            
+
             # 주문 모니터링 중단
             self.order_manager.stop_monitoring()
-            
+
             # 텔레그램 통합 종료
             await self.telegram.shutdown()
             

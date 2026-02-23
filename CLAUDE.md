@@ -39,7 +39,7 @@ python main.py
 
 #### 선정 기준
 - Universe 300개 종목 대상
-- 갭 상승: 전일 종가 대비 0.3~3% 상승
+- 갭 상승: 전일 종가 대비 0.3~2% 상승
 - 거래대금: 100억 이상 (전일 기준)
 - ATR 유효성: 14일 ATR 계산 가능
 
@@ -52,7 +52,7 @@ python main.py
 #### ORB 레인지 계산
 - **데이터**: 1분봉 (09:00~09:10)
 - **계산**: 10분 구간 고가/저가
-- **검증**: 레인지가 가격의 0.3~2% 범위인지 확인
+- **검증**: 레인지가 가격의 1.0~2.5% 범위인지 확인
 
 #### 목표가/손절가 설정
 ```
@@ -64,7 +64,7 @@ python main.py
 
 #### 매수 조건
 - ORB 고가 돌파 (3분봉 종가 기준)
-- 거래량 1.5배 이상 (ORB 구간 평균 대비)
+- 거래량 2.0배 이상 (ORB 구간 평균 대비)
 - 3분봉 완성 + 10초 시점에 판단
 
 #### 매도 조건
@@ -103,7 +103,7 @@ python scripts/update_weekly_universe.py
 ### 로그 파일 위치
 - **거래 로그**: `logs/trading_YYYYMMDD.log`
 - **패턴 데이터**: `pattern_data_log/pattern_data_YYYYMMDD.jsonl` (활성화 시)
-- **캐시 데이터**: `cache/minute_data/종목코드_YYYYMMDD.pkl`
+- **캐시 데이터**: PostgreSQL `minute_candles` 테이블
 
 ### 주요 분석 명령어
 
@@ -156,20 +156,22 @@ grep "수익률" logs/trading_20260114.log
 - 1분봉 → 3분봉 변환 (floor 방식)
 
 #### 캐시 데이터
-- 장 마감 후 확정 데이터 저장
+- 장 마감 후 확정 데이터 PostgreSQL에 저장
 - 시뮬레이션/분석 용도
-- 위치: `cache/minute_data/`
+- 저장소: PostgreSQL `minute_candles` 테이블
 
 ### ORB 전략 파라미터
 
 #### 기본 설정 (`config/orb_strategy_config.py`)
 ```python
 min_gap_ratio = 0.003        # 최소 갭 0.3%
-max_gap_ratio = 0.03         # 최대 갭 3%
+max_gap_ratio = 0.02         # 최대 갭 2%
 orb_end_time = "09:10"       # ORB 종료 시간
-volume_surge_ratio = 1.5     # 거래량 배수
-take_profit_multiplier = 2.0 # 익절 배수
-stop_loss_ratio = 1.0        # 손절 (ORB 저가)
+volume_surge_ratio = 2.0     # 거래량 배수 (ORB 구간 평균 대비)
+take_profit_multiplier = 2.0 # 익절 배수 (ORB range_size × 2.0)
+stop_loss_type = "orb_low"   # 손절 (ORB 저가)
+min_range_ratio = 0.010      # 최소 레인지 1.0%
+max_range_ratio = 0.025      # 최대 레인지 2.5%
 ```
 
 ---
@@ -328,7 +330,7 @@ df['floor_3min'] = df.index.floor('3min')
 
 매수 판단:
 ✓ ORB 고가 돌파
-✓ 거래량 조건 충족 (1.5배 이상)
+✓ 거래량 조건 충족 (2.0배 이상)
 ✓ 3분봉 완성 + 10초 대기
 
 매수 실행:
@@ -522,7 +524,7 @@ take_profit_multiplier = 3.0  # 공격적 (큰 수익 추구)
 ## 최근 수정 사항 (2026-01-29)
 
 ### 1. 08:55 데이터 수집 로직 개선
-**파일**: `core/intraday_stock_manager.py:160-175`
+**파일**: `core/intraday_stock_manager.py:168-174`
 
 **문제**:
 - 08:55 후보 선정 시 과거 데이터 수집 시도
@@ -546,7 +548,7 @@ if is_premarket:
 - 09:00 이후 자동으로 데이터 수집
 
 ### 2. 반복 매수 신호 필터링
-**파일**: `main.py:463-466`
+**파일**: `main.py:527-529`
 
 **문제**:
 - 매수 신호가 3분봉마다 반복 발생 (3,981회)
@@ -566,7 +568,7 @@ if trading_stock.state in (StockState.BUY_PENDING, StockState.POSITIONED,
 - CPU 부하 감소
 
 ### 3. 텔레그램 통합 버그 수정
-**파일**: `main.py:1089`
+**파일**: `main.py:1140`
 
 **문제**:
 ```python
@@ -625,8 +627,8 @@ await self.telegram.notify_system_status(message)
 - 15:00 일괄 청산도 실행 안 됨
 
 **수정 위치**:
-1. `core/trading_decision_engine.py:234-260` - Position 객체 생성 로직 추가
-2. `main.py:520-530` - 포지션 없을 때 경고 로그 추가
+1. `core/trading_decision_engine.py:262-283` - Position 객체 생성 로직 추가
+2. `main.py` - 포지션 없을 때 경고 로그 추가
 
 **수정 내용**:
 ```python
@@ -671,7 +673,7 @@ grep "일괄매도" logs/trading_YYYYMMDD.log
 - 76개 종목에서 분석 실패
 - 후보 종목 0개 선정 → 당일 거래 없음
 
-**수정 위치**: `strategies/orb_strategy.py:348`
+**수정 위치**: `strategies/orb_strategy.py:364`
 
 **수정 내용**:
 ```python
@@ -724,10 +726,11 @@ def can_buy_today(self) -> bool:
 volume_surge_ratio: float = 2.0  # 기존 1.5배 → 2.0배
 ```
 
-3. **익절 배수 상향** (`config/orb_strategy_config.py`)
+3. **익절 배수 조정** (`config/orb_strategy_config.py`)
 ```python
-take_profit_multiplier: float = 2.5  # 기존 2.0배 → 2.5배
-# 목표가 = ORB 고가 + (range_size × 2.5)
+# 2.0 → 2.5로 상향 후, 다시 2.0으로 하향 복귀 (승률 개선, R:R 균형)
+take_profit_multiplier: float = 2.0  # 현재값
+# 목표가 = ORB 고가 + (range_size × 2.0)
 ```
 
 **시뮬레이션 검증 결과** (8일간, `scripts/simulate_trading.py --all`):
