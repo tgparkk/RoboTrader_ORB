@@ -1,10 +1,10 @@
-config: disable_time_trailing_for_better_performance
+fix: force_liquidate_stale_virtual_positions_on_restart
 
-- Set enable_time_trailing = False in ORB strategy config
-- Production code simulation (12-month, 232 days) showed:
-  - ON:  +48.7%, Sharpe 2.84, MDD -13.9%, 7329 trades
-  - OFF: +54.4%, Sharpe 3.14, MDD -13.5%, 5165 trades
-- 14:30 breakeven stop was causing 2701 unnecessary loss trades
-- TP/SL/15:00 liquidation still active
+- Restored virtual positions from previous days now get force_liquidate flag
+- analyze_sell_decision() checks force_liquidate before any other sell logic
+- Fixes bug where positions restored without TP/SL stayed open indefinitely
+- ORB is day-trading: any overnight position must be liquidated at market open
+- Also sets entry_price in metadata for proper PnL calculation on forced sell
 
+Co-Authored-By: Taegeon Park <tgparkk@gmail.com>
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>

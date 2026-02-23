@@ -172,6 +172,10 @@ class TradingDecisionEngine:
 
         current_price = float(data['close'].iloc[-1])
 
+        # 0. 전일 미청산 포지션 강제 청산
+        if hasattr(trading_stock, 'metadata') and trading_stock.metadata and trading_stock.metadata.get('force_liquidate'):
+            return True, f"전일 미청산 강제 청산 @{current_price:,.0f}원"
+
         # 1. 기본 손절/익절 체크 (우선순위)
         if trading_stock.stop_loss_price and current_price <= trading_stock.stop_loss_price:
             return True, f"손절 ({trading_stock.stop_loss_price:,.0f}원)"

@@ -556,9 +556,13 @@ class OrderManager:
             self.logger.warning(f"⏰ 5분 타임아웃 처리: {order_id} ({order.stock_code}) "
                               f"- 경과시간: {elapsed_time:.0f}초")
             
+            # 🔧 cancel_order()가 _move_to_completed()를 호출하여 pending_orders에서 제거하므로
+            # order 참조를 미리 저장해둔다
+            saved_order = order
+
             # 미체결 주문 취소
             cancel_success = await self.cancel_order(order_id)
-            
+
             if cancel_success:
                 self.logger.info(f"✅ 타임아웃 취소 성공: {order_id}")
             else:
@@ -567,26 +571,17 @@ class OrderManager:
                 if order_id in self.pending_orders:
                     order = self.pending_orders[order_id]
                     order.status = OrderStatus.TIMEOUT  # 타임아웃 상태로 변경
+                    saved_order = order  # 강제 정리 후에도 참조 갱신
                     self._move_to_completed(order_id)
                     self.logger.warning(f"🔄 타임아웃으로 인한 강제 상태 정리: {order_id} (PENDING → TIMEOUT)")
-                    
-                    # 🆕 TradingStockManager에 타임아웃 상황 알림
-                    if self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
-                        try:
-                            await self.trading_manager.handle_order_timeout(order)
-                            self.logger.info(f"✅ TradingStockManager 타임아웃 처리 완료: {order_id}")
-                        except Exception as notify_error:
-                            self.logger.error(f"❌ TradingStockManager 타임아웃 처리 실패: {notify_error}")
-            
-            # 🆕 취소 성공한 경우도 TradingStockManager에 알림 (상태 동기화)
-            if cancel_success and self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
+
+            # 🔧 취소 성공/실패 모두 TradingStockManager에 타임아웃 알림 (상태 동기화)
+            if self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
                 try:
-                    order = self.pending_orders.get(order_id)
-                    if order:
-                        await self.trading_manager.handle_order_timeout(order)
-                        self.logger.info(f"✅ TradingStockManager 취소 처리 완료: {order_id}")
+                    await self.trading_manager.handle_order_timeout(saved_order)
+                    self.logger.info(f"✅ TradingStockManager 타임아웃 처리 완료: {order_id}")
                 except Exception as notify_error:
-                    self.logger.error(f"❌ TradingStockManager 취소 처리 실패: {notify_error}")
+                    self.logger.error(f"❌ TradingStockManager 타임아웃 처리 실패: {notify_error}")
             
         except Exception as e:
             self.logger.error(f"타임아웃 처리 실패 {order_id}: {e}")
@@ -613,42 +608,37 @@ class OrderManager:
                               f"주문봉: {order.order_3min_candle_time.strftime('%H:%M') if order.order_3min_candle_time else 'N/A'} "
                               f"현재봉: {current_candle.strftime('%H:%M')}")
             
+            # 🔧 cancel_order()가 _move_to_completed()를 호출하여 pending_orders에서 제거하므로
+            # order 참조를 미리 저장해둔다
+            saved_order = order
+
             # 미체결 주문 취소
             cancel_success = await self.cancel_order(order_id)
-            
+
             if cancel_success:
                 # 텔레그램 알림 (기존 cancel_order에서 이미 알림이 발송되므로 추가 정보만 포함)
                 if self.telegram:
                     await self.telegram.notify_order_cancelled({
-                        'stock_code': order.stock_code,
-                        'stock_name': f'Stock_{order.stock_code}',
-                        'order_type': order.order_type.value
+                        'stock_code': saved_order.stock_code,
+                        'stock_name': f'Stock_{saved_order.stock_code}',
+                        'order_type': saved_order.order_type.value
                     }, "3분봉 4개 경과")
             else:
                 # 🆕 4분봉 타임아웃 취소 실패 시에도 강제로 상태 정리
                 if order_id in self.pending_orders:
                     order = self.pending_orders[order_id]
                     order.status = OrderStatus.TIMEOUT
+                    saved_order = order  # 강제 정리 후에도 참조 갱신
                     self._move_to_completed(order_id)
                     self.logger.warning(f"🔄 3분봉 타임아웃으로 인한 강제 상태 정리: {order_id} (PENDING → TIMEOUT)")
-                    
-                    # 🆕 TradingStockManager에 3분봉 타임아웃 상황 알림
-                    if self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
-                        try:
-                            await self.trading_manager.handle_order_timeout(order)
-                            self.logger.info(f"✅ TradingStockManager 3분봉 타임아웃 처리 완료: {order_id}")
-                        except Exception as notify_error:
-                            self.logger.error(f"❌ TradingStockManager 3분봉 타임아웃 처리 실패: {notify_error}")
-            
-            # 🆕 3분봉 타임아웃 취소 성공한 경우도 TradingStockManager에 알림
-            if cancel_success and self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
+
+            # 🔧 취소 성공/실패 모두 TradingStockManager에 타임아웃 알림 (상태 동기화)
+            if self.trading_manager and hasattr(self.trading_manager, 'handle_order_timeout'):
                 try:
-                    order = self.pending_orders.get(order_id)  
-                    if order:
-                        await self.trading_manager.handle_order_timeout(order)
-                        self.logger.info(f"✅ TradingStockManager 3분봉 취소 처리 완료: {order_id}")
+                    await self.trading_manager.handle_order_timeout(saved_order)
+                    self.logger.info(f"✅ TradingStockManager 3분봉 타임아웃 처리 완료: {order_id}")
                 except Exception as notify_error:
-                    self.logger.error(f"❌ TradingStockManager 3분봉 취소 처리 실패: {notify_error}")
+                    self.logger.error(f"❌ TradingStockManager 3분봉 타임아웃 처리 실패: {notify_error}")
             
         except Exception as e:
             self.logger.error(f"3분봉 타임아웃 처리 실패 {order_id}: {e}")

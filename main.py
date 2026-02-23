@@ -717,7 +717,8 @@ class DayTradingBot:
                                         f"→ 당일 신규 매수 중단됨"
                                     )
 
-                                # 상태를 COMPLETED로 변경하여 거래 종료
+                                # 🔧 포지션 정리 후 상태를 COMPLETED로 변경하여 거래 종료
+                                trading_stock.clear_position()
                                 self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 매도 체결")
                             else:
                                 self.logger.warning(f"⚠️ 가상 매도 실패: {stock_code}({stock_name})")
@@ -974,6 +975,7 @@ class DayTradingBot:
                                 virtual_balance = self.decision_engine.virtual_trading.get_virtual_balance()
                                 self.fund_manager.update_total_funds(virtual_balance)
                                 self.logger.info(f"📉 가상 일괄청산: {stock_code}({stock_name}) - {reason}")
+                                trading_stock.clear_position()
                                 self.trading_manager._change_stock_state(stock_code, StockState.COMPLETED, "가상 일괄청산 체결")
                             else:
                                 failed_virtual.append(f"{stock_code}({stock_name})")
@@ -1317,12 +1319,28 @@ class DayTradingBot:
                             if not hasattr(trading_stock, 'metadata') or trading_stock.metadata is None:
                                 trading_stock.metadata = {}
                             trading_stock.metadata['buy_record_id'] = buy_id
-                            trading_stock.state = StockState.POSITIONED
+                            self.trading_manager._change_stock_state(
+                                code, StockState.POSITIONED, f"미청산 포지션 복구: {qty}주 @{buy_price:,.0f}원"
+                            )
                             restored += 1
                 except Exception as e:
                     self.logger.warning(f"⚠️ {code}({name}) 포지션 복원 실패: {e}")
 
-            self.logger.info(f"✅ 미청산 가상 포지션 {restored}/{len(rows)}건 복원 완료 (15:00 장마감 청산 대상)")
+            self.logger.info(f"✅ 미청산 가상 포지션 {restored}/{len(rows)}건 복원 완료")
+
+            # ORB 당일 청산 원칙: 전일 미청산 포지션은 장 시작 시 즉시 청산 예약
+            # metadata에 force_liquidate 플래그를 설정하여 다음 매도 판단에서 즉시 청산
+            for row in rows:
+                buy_id, code, name, buy_price, qty, ts = row
+                trading_stock = self.trading_manager.trading_stocks.get(code)
+                if trading_stock and trading_stock.position:
+                    if not hasattr(trading_stock, 'metadata') or trading_stock.metadata is None:
+                        trading_stock.metadata = {}
+                    trading_stock.metadata['force_liquidate'] = True
+                    trading_stock.metadata['entry_price'] = float(buy_price)
+                    trading_stock.metadata['stop_loss'] = 0  # 즉시 청산이므로 의미 없음
+                    trading_stock.metadata['take_profit'] = float('inf')
+                    self.logger.info(f"🔴 {code}({name}) 전일 미청산 → 장 시작 즉시 청산 예약")
 
         except Exception as e:
             self.logger.error(f"❌ 미청산 가상 포지션 복원 실패: {e}")
@@ -1639,6 +1657,19 @@ class DayTradingBot:
     async def emergency_sync_positions(self):
         """긴급 포지션 동기화 - 매수가 기준 3%/2% 고정 비율"""
         try:
+            # 🔧 가상 거래 모드에서는 실계좌 동기화 불필요
+            if self.config.risk_management.use_virtual_trading:
+                return
+
+            # 🔧 API rate limit 보호: 최소 60초 간격으로 실행
+            from utils.korean_time import now_kst
+            current_time = now_kst()
+            if not hasattr(self, '_last_emergency_sync_time'):
+                self._last_emergency_sync_time = None
+            if self._last_emergency_sync_time and (current_time - self._last_emergency_sync_time).total_seconds() < 60:
+                return
+            self._last_emergency_sync_time = current_time
+
             self.logger.info("🔧 긴급 포지션 동기화 시작")
 
             # 실제 잔고 조회

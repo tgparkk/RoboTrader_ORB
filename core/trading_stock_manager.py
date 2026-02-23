@@ -464,13 +464,16 @@ class TradingStockManager:
                     order.stock_code == trading_stock.stock_code):
                     
                     if order.status == OrderStatus.FILLED:
+                        # 🔧 수익률 계산을 위해 매수가를 clear_position() 전에 저장
+                        saved_avg_price = trading_stock.position.avg_price if trading_stock.position else None
+
                         # 매도 완료 - 완료 상태로 변경
                         with self._lock:
                             trading_stock.clear_position()
                             trading_stock.clear_current_order()
                             self._change_stock_state(
-                                trading_stock.stock_code, 
-                                StockState.COMPLETED, 
+                                trading_stock.stock_code,
+                                StockState.COMPLETED,
                                 f"매도 완료: {order.quantity}주 @{order.price:,.0f}원"
                             )
                         # 실거래 매도 기록 저장 (매칭된 매수와 손익 계산)
@@ -479,11 +482,11 @@ class TradingStockManager:
                             from db.database_manager import DatabaseManager
                             db = DatabaseManager()
                             buy_id = db.get_last_open_real_buy(trading_stock.stock_code)
-                            
-                            # 수익률 계산을 위해 매수가 조회
+
+                            # 🔧 수익률 계산: clear_position() 전에 저장한 매수가 사용
                             buy_price = None
-                            if buy_id and trading_stock.position and trading_stock.position.avg_price:
-                                buy_price = trading_stock.position.avg_price
+                            if buy_id and saved_avg_price:
+                                buy_price = saved_avg_price
                                 profit_rate = ((float(order.price) - buy_price) / buy_price) * 100
                             
                             db.save_real_sell(
@@ -718,25 +721,28 @@ class TradingStockManager:
                         trading_stock.order_processed = True
                         trading_stock.is_selling = False  # 매도 완료
                         
+                        # 🔧 수익률 계산을 위해 매수가를 clear_position() 전에 저장
+                        saved_avg_price = trading_stock.position.avg_price if trading_stock.position else None
+
                         trading_stock.clear_position()
                         trading_stock.clear_current_order()
                         self._change_stock_state(
-                            trading_stock.stock_code, 
-                            StockState.COMPLETED, 
+                            trading_stock.stock_code,
+                            StockState.COMPLETED,
                             f"매도 체결 (콜백): {order.quantity}주 @{order.price:,.0f}원"
                         )
-                        
+
                         # 실거래 매도 기록 저장
                         profit_rate = 0.0
                         try:
                             from db.database_manager import DatabaseManager
                             db = DatabaseManager()
                             buy_id = db.get_last_open_real_buy(trading_stock.stock_code)
-                            
-                            # 수익률 계산을 위해 매수가 조회 (콜백 매도)
+
+                            # 🔧 수익률 계산: clear_position() 전에 저장한 매수가 사용
                             buy_price = None
-                            if buy_id and trading_stock.position and trading_stock.position.avg_price:
-                                buy_price = trading_stock.position.avg_price
+                            if buy_id and saved_avg_price:
+                                buy_price = saved_avg_price
                                 profit_rate = ((float(order.price) - buy_price) / buy_price) * 100
                             
                             db.save_real_sell(
