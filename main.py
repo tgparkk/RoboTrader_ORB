@@ -991,6 +991,12 @@ class DayTradingBot:
                     )
                 self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 가상 일괄청산 완료")
 
+                # 일괄청산 직후 일일 거래 요약 PG 저장 (shutdown 미호출 대비)
+                try:
+                    await self.telegram.notify_daily_summary()
+                except Exception as summary_e:
+                    self.logger.warning(f"⚠️ 일괄청산 후 일일 요약 저장 실패: {summary_e}")
+
                 # 🆕 [민수] 장 마감 후 메모리 정리
                 self.order_manager.cleanup_completed_orders()
                 return
@@ -1045,6 +1051,12 @@ class DayTradingBot:
                 )
 
             self.logger.info(f"✅ {eod_hour}:{eod_minute:02d} 시장가 일괄매도 요청 완료")
+
+            # 일괄매도 직후 일일 거래 요약 PG 저장 (shutdown 미호출 대비)
+            try:
+                await self.telegram.notify_daily_summary()
+            except Exception as summary_e:
+                self.logger.warning(f"⚠️ 일괄매도 후 일일 요약 저장 실패: {summary_e}")
 
         except Exception as e:
             self.logger.error(f"❌ 장마감 시장가 매도 오류: {e}")
@@ -1135,6 +1147,12 @@ class DayTradingBot:
                     self.logger.error(f"❌ Failsafe 청산 개별 오류 ({stock_code}, buy_id={buy_id}): {e}")
 
             self.logger.info(f"✅ 15:15 Failsafe sweep 완료")
+
+            # Failsafe sweep 후 일일 요약 재저장 (추가 청산분 반영)
+            try:
+                await self.telegram.notify_daily_summary()
+            except Exception as summary_e:
+                self.logger.warning(f"⚠️ Failsafe sweep 후 일일 요약 저장 실패: {summary_e}")
 
             # 텔레그램 알림
             await self.telegram.notify_system_status(
@@ -1546,7 +1564,7 @@ class DayTradingBot:
                         continue
 
                     # ORB 레인지 계산
-                    result = await strategy.calculate_orb_range(stock_code, minute_1_data)
+                    result = await strategy.calculate_orb_range(stock_code, minute_1_data, stock_name=stock_name)
 
                     if result:
                         success_count += 1

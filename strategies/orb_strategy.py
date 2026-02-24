@@ -781,7 +781,8 @@ class ORBStrategy(TradingStrategy):
     async def calculate_orb_range(
         self,
         code: str,
-        minute_1_data: Any
+        minute_1_data: Any,
+        stock_name: str = ''
     ) -> bool:
         """
         ORB 레인지 계산 (09:00~09:10)
@@ -789,6 +790,7 @@ class ORBStrategy(TradingStrategy):
         Args:
             code: 종목 코드
             minute_1_data: 1분봉 데이터 (09:00~09:10 구간)
+            stock_name: 종목명
 
         Returns:
             계산 성공 여부
@@ -863,7 +865,7 @@ class ORBStrategy(TradingStrategy):
                     target_price = orb_high + (range_size * self.config.take_profit_multiplier)
                     self.pg.save_orb_range(
                         stock_code=code,
-                        stock_name='',
+                        stock_name=stock_name,
                         trading_date=now_kst().strftime('%Y%m%d'),
                         orb_data={
                             'orb_high': float(orb_high),
