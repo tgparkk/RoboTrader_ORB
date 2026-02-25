@@ -408,9 +408,7 @@ class TelegramIntegration:
 
             # 후보 종목 수 (trading_manager 전체)
             if hasattr(bot, 'trading_manager'):
-                from core.models import StockState
-                all_stocks = bot.trading_manager.get_all_stocks()
-                summary['candidate_count'] = len(all_stocks)
+                summary['candidate_count'] = len(bot.trading_manager.trading_stocks)
 
             # ORB 유효 종목 수
             if hasattr(bot, 'decision_engine') and hasattr(bot.decision_engine, 'strategy'):
